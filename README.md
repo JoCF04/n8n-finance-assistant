@@ -1,4 +1,4 @@
-# 💰 n8n Finance Assistant
+#  n8n Finance Assistant
 
 **Asistente personal de finanzas y productividad en Telegram, construido sobre n8n, PostgreSQL y Gemini. Corre 24/7 por $0 al mes.**
 
@@ -18,15 +18,15 @@ Le escribo al bot como le escribiría a una persona (*"15 almuerzo"*, *"recuérd
 
 | | |
 |---|---|
-| 💸 **Registro de gastos** | Texto libre (`taxi 12.50`, `ayer 30 cine`), **nota de voz**, **captura de Yape** o **varios en una frase** (`15 almuerzo, 10 taxi y 5 gaseosa`). |
-| 🏦 **Correos del banco** | Lee las notificaciones de consumo de Gmail, extrae monto y comercio, y los registra sin duplicar. |
-| 🎯 **Presupuestos y recurrentes** | Límite mensual por categoría con avisos al 80 % y al 100 %. Pagos fijos (Spotify, alquiler) que se cargan solos el día que tocan. |
-| 📊 **Reportes** | Resumen diario, semanal y de cierre de mes. Gráficos (`/grafico`) y exportación a Excel (`/excel mesanterior`). |
-| ⏰ **Agenda** | Recordatorios con repetición (diario, semanal, mensual, días laborables), tareas con prioridad y eventos en **Google Calendar**. Agenda a las 7 am con el clima y revisión semanal el domingo. |
-| 🤝 **Deudas y metas** | *"Le presté 50 a Juan"* → saldo por persona. *"Quiero ahorrar 2000 para una laptop"* → barra de progreso. |
-| 💬 **Preguntas libres** | *"¿Qué tareas tengo hoy?"*, *"¿cuánto gasté en Uber este mes?"*. El modelo escribe el SQL, un guardarraíl lo valida y la respuesta vuelve en lenguaje natural. |
-| 📗 **Google Sheets en vivo** | Hoja "Mis finanzas" con fórmulas y dashboard, sincronizada desde la base cada minuto. También sirve de backup. |
-| 🚨 **Alertas** | Si cualquier workflow falla, llega un aviso a Telegram con el nodo, el error, una pista de solución y el link a la ejecución. |
+|  **Registro de gastos** | Texto libre (`taxi 12.50`, `ayer 30 cine`), **nota de voz**, **captura de Yape** o **varios en una frase** (`15 almuerzo, 10 taxi y 5 gaseosa`). |
+|  **Correos del banco** | Lee las notificaciones de consumo de Gmail, extrae monto y comercio, y los registra sin duplicar. |
+|  **Presupuestos y recurrentes** | Límite mensual por categoría con avisos al 80 % y al 100 %. Pagos fijos (Spotify, alquiler) que se cargan solos el día que tocan. |
+|  **Reportes** | Resumen diario, semanal y de cierre de mes. Gráficos (`/grafico`) y exportación a Excel (`/excel mesanterior`). |
+|  **Agenda** | Recordatorios con repetición (diario, semanal, mensual, días laborables), tareas con prioridad y eventos en **Google Calendar**. Agenda a las 7 am con el clima y revisión semanal el domingo. |
+|  **Deudas y metas** | *"Le presté 50 a Juan"* → saldo por persona. *"Quiero ahorrar 2000 para una laptop"* → barra de progreso. |
+|  **Preguntas libres** | *"¿Qué tareas tengo hoy?"*, *"¿cuánto gasté en Uber este mes?"*. El modelo escribe el SQL, un guardarraíl lo valida y la respuesta vuelve en lenguaje natural. |
+|  **Google Sheets en vivo** | Hoja "Mis finanzas" con fórmulas y dashboard, sincronizada desde la base cada minuto. También sirve de backup. |
+|  **Alertas** | Si cualquier workflow falla, llega un aviso a Telegram con el nodo, el error, una pista de solución y el link a la ejecución. |
 
 <p align="center">
   <img src="docs/img/grafico_categorias.png" width="32%">
