@@ -1,0 +1,206 @@
+{
+  "name": "Sincronizar Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a92b23b4-380d-a480-67d6-31963668f44b",
+      "name": "Cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ Pega aquí el ID de tu hoja \"Mis finanzas\" (lo que va entre /d/ y /edit en el link)\nconst SHEET_ID = 'PEGA_AQUI_EL_ID_DE_TU_HOJA';\n// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nif (SHEET_ID.startsWith('PEGA_AQUI')) return [];\nconst C = Number(CHAT_ID);\nconst TZ = \"'America/Lima'\";\n// Fechas como número de serie de hoja de cálculo (así no importa el idioma de la hoja)\nconst S = x => `round((extract(epoch from (${x} AT TIME ZONE ${TZ})) / 86400.0 + 25569)::numeric, 6)`;\nconst SL = x => `round((extract(epoch from ${x}) / 86400.0 + 25569)::numeric, 6)`;\nconst SD = x => `(${x} - date '1899-12-30')`;\n\nconst sql = `\nWITH mov AS (\n  SELECT fecha, 'Gasto'::text AS tipo, monto, categoria, COALESCE(descripcion, '') AS d, metodo AS m FROM gastos WHERE chat_id = ${C}\n  UNION ALL\n  SELECT fecha, 'Ingreso', monto, '', COALESCE(descripcion, ''), '' FROM ingresos WHERE chat_id = ${C}\n), p AS (\n  SELECT json_build_object(\n    'mov', COALESCE((SELECT json_agg(json_build_array(${S('fecha')}, tipo, monto, categoria, d, m, ${SL(`date_trunc('week', fecha AT TIME ZONE ${TZ})`)}) ORDER BY fecha DESC, tipo) FROM mov), '[]'::json),\n    'pres', COALESCE((SELECT json_agg(json_build_array(categoria, monto) ORDER BY categoria) FROM presupuestos WHERE chat_id = ${C}), '[]'::json),\n    'deu_res', COALESCE((SELECT json_agg(json_build_array(persona, saldo, CASE WHEN saldo > 0 THEN 'te debe' ELSE 'le debes' END) ORDER BY saldo DESC) FROM (\n        SELECT (array_agg(persona ORDER BY id DESC))[1] AS persona, sum(monto) AS saldo FROM deudas WHERE chat_id = ${C}\n        GROUP BY lower(persona) HAVING abs(sum(monto)) >= 0.01) x), '[]'::json),\n    'deu_mov', COALESCE((SELECT json_agg(json_build_array(${S('fecha')}, persona, monto, COALESCE(descripcion, '')) ORDER BY fecha DESC, id DESC) FROM deudas WHERE chat_id = ${C}), '[]'::json),\n    'metas', COALESCE((SELECT json_agg(json_build_array(nombre, objetivo, ahorrado, CASE WHEN fecha_limite IS NULL THEN NULL ELSE ${SD('fecha_limite')} END) ORDER BY id) FROM metas WHERE chat_id = ${C} AND activa), '[]'::json),\n    'tareas', COALESCE((SELECT json_agg(json_build_array(texto, CASE prioridad WHEN 1 THEN 'Alta' WHEN 2 THEN 'Media' ELSE 'Baja' END,\n        CASE WHEN vence IS NULL THEN NULL ELSE ${SD('vence')} END, CASE WHEN hecha THEN 'Hecha' ELSE 'Pendiente' END,\n        CASE WHEN hecha_en IS NULL THEN NULL ELSE ${S('hecha_en')} END, ${S('creado_en')})\n        ORDER BY hecha, vence NULLS LAST, prioridad, id) FROM tareas WHERE chat_id = ${C}), '[]'::json),\n    'recu', COALESCE((SELECT json_agg(json_build_array(nombre, monto, categoria, dia, CASE WHEN activo THEN 'Sí' ELSE 'No' END) ORDER BY activo DESC, dia, id) FROM recurrentes WHERE chat_id = ${C}), '[]'::json),\n    'reco', COALESCE((SELECT json_agg(json_build_array(texto, ${S('cuando')}, COALESCE(repetir, 'una vez')) ORDER BY cuando) FROM recordatorios WHERE chat_id = ${C} AND activo), '[]'::json)\n  ) AS payload\n)\n-- Solo devuelve algo si cambió desde la última vez\nSELECT md5(payload::text) AS hash, payload FROM p\nWHERE md5(payload::text) IS DISTINCT FROM (SELECT hash FROM sync_estado WHERE clave = 'sheets');`;\n\nreturn [{ json: { sheet_id: SHEET_ID, sql } }];\n"
+      },
+      "id": "b92319c9-b951-6f3e-3770-41a06ff1aa1d",
+      "name": "Preparar sync",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {}
+      },
+      "id": "5b69a1a2-7dac-d38d-2d98-96f2000ab012",
+      "name": "Datos para la hoja",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst cfg = $('Preparar sync').first().json;\nconst P = typeof j.payload === 'string' ? JSON.parse(j.payload) : j.payload;\n\n// 1) Borra solo las celdas de datos (las fórmulas y formatos se quedan)\nconst clear = { ranges: ['Movimientos!A2:G', 'Presupuestos!A2:B', 'Deudas!A2:C', 'Deudas!E2:H', 'Metas!A2:D',\n  'Tareas!A2:F', 'Recurrentes!A2:E', 'Recordatorios!A2:C'] };\n\n// 2) Escribe todo de nuevo desde tu base de datos\nconst data = [];\nconst add = (range, rows) => { if (rows && rows.length) data.push({ range, values: rows }); };\nadd('Movimientos!A2', P.mov);\nadd('Presupuestos!A2', P.pres);\nadd('Deudas!A2', P.deu_res);\nadd('Deudas!E2', P.deu_mov);\nadd('Metas!A2', P.metas);\nadd('Tareas!A2', P.tareas);\nadd('Recurrentes!A2', P.recu);\nadd('Recordatorios!A2', P.reco);\ndata.push({ range: 'Resumen!B2', values: [[$now.setZone('America/Lima').toFormat('dd/MM/yyyy HH:mm')]] });\n\nreturn [{ json: { sheet_id: cfg.sheet_id, hash: j.hash, filas: (P.mov || []).length, clear, update: { valueInputOption: 'RAW', data } } }];\n"
+      },
+      "id": "4c7c43a9-8f6e-9e4d-218c-e3c4789fb2bc",
+      "name": "Armar escritura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "timeout": 60000
+        },
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $json.sheet_id }}/values:batchClear",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.clear) }}"
+      },
+      "id": "d58d44a3-90ad-897a-d6bf-473574006bcf",
+      "name": "Limpiar hoja",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "timeout": 60000
+        },
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Armar escritura').first().json.sheet_id }}/values:batchUpdate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Armar escritura').first().json.update) }}"
+      },
+      "id": "b0050a6b-d011-911b-9f62-3be9e94d3592",
+      "name": "Escribir hoja",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "options": {},
+        "query": "INSERT INTO sync_estado (clave, hash, actualizado) VALUES ('sheets', '{{ $('Armar escritura').first().json.hash }}', now()) ON CONFLICT (clave) DO UPDATE SET hash = EXCLUDED.hash, actualizado = now();"
+      },
+      "id": "fd51c06f-d41f-f63c-f00c-146532a97c41",
+      "name": "Guardar huella",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1344,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Cada minuto": {
+      "main": [
+        [
+          {
+            "node": "Preparar sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar sync": {
+      "main": [
+        [
+          {
+            "node": "Datos para la hoja",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Datos para la hoja": {
+      "main": [
+        [
+          {
+            "node": "Armar escritura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar escritura": {
+      "main": [
+        [
+          {
+            "node": "Limpiar hoja",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpiar hoja": {
+      "main": [
+        [
+          {
+            "node": "Escribir hoja",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escribir hoja": {
+      "main": [
+        [
+          {
+            "node": "Guardar huella",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Lima",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  }
+}

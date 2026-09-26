@@ -1,0 +1,1166 @@
+{
+  "name": "Contador",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "6e2a7e27-b635-49b9-71ce-ea296e5eacf0",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -384,
+        256
+      ],
+      "webhookId": "1aed25c8-3642-ef00-8970-27b9758fa907"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ Tu chat_id de Telegram (solo tú puedes usar el bot)\nconst CHAT_ID = 'TU_CHAT_ID';\n\n// --- Camino rápido: registra gastos sin IA cuando el texto es claro ---\nconst L = 'a-z0-9áéíóúñü';\nconst w = lista => new RegExp(`(^|[^${L}])(${lista})s?(?=$|[^${L}])`, 'i');\nconst REGLAS = {\n  'Comida': w('almuerzo|desayuno|cena|lonche|menu|menú|comida|pollo|pollería|polleria|pizza|burger|hamburguesa|cafe|café|snack|galleta|gaseosa|chifa|ceviche|delivery|rappi|pedidosya|mercado|pan|fruta|helado|chocolate|juane|salchipapa|sanguche|sandwich|kfc|bembos|starbucks|mcdonalds|tambo|oxxo'),\n  'Transporte': w('taxi|uber|indrive|didi|cabify|bus|combi|micro|metro|metropolitano|corredor|pasaje|gasolina|combustible|peaje|mototaxi|moto|estacionamiento|cochera'),\n  'Ocio': w('cine|juego|salida|chela|cerveza|trago|bar|discoteca|disco|concierto|netflix|spotify|steam|playstation|psn|xbox|fiesta|entrada|karaoke|bowling|billar'),\n  'Compras': w('ropa|zapatilla|polo|pantalón|pantalon|casaca|audifono|audífono|cable|cargador|amazon|aliexpress|temu|compra|regalo|mochila'),\n  'Salud': w('farmacia|pastilla|medicina|doctor|consulta|gym|gimnasio|dentista|inkafarma|mifarma|vitamina'),\n  'Educación': w('curso|libro|copia|impresión|impresion|upc|universidad|udemy|platzi|matrícula|matricula|útiles|utiles'),\n  'Servicios': w('recarga|celular|internet|luz|plan|suscripción|suscripcion|icloud|claude|chatgpt|google one|youtube premium|corte|peluquería|peluqueria|barbería|barberia|lavandería|lavanderia'),\n  'Hogar': w('casa|limpieza|detergente|mueble|foco|alquiler|jabón|jabon|papel'),\n};\n// Si suena a ingreso o a agenda (recordatorio, tarea, evento), siempre lo decide la IA\nconst INGRESO = w('sueldo|salario|pagaron|yapearon|plinearon|depositaron|transfirieron|cobr[eé]|ingreso|quincena|propina|reembolso|reembolsaron|devolvieron|gan[eé]|vend[ií]');\nconst AGENDA = w('recu[eé]rdame|recordar|recordatorio|av[ií]same|alarma|tarea|pendiente|agenda|agendar|ag[eé]ndame|evento|reuni[oó]n|cita|cumplea[nñ]os|tengo que|debo|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|a las');\n\n// Preguntas, deudas y ahorros también van a la IA\nconst OTROS = w('cu[aá]nto|cu[aá]ntos|cu[aá]ntas|qu[eé]|c[oó]mo|cu[aá]l|cu[aá]les|d[oó]nde|cu[aá]ndo|por qu[eé]|muestra|mu[eé]strame|dame|debe|deben|deb[ií]a|prest[eé]|prest[oó]|prestaron|ahorr[eé]|ahorro|ahorrar|separ[eé]|meta|hola|gracias');\n\nfunction rapido(texto) {\n  const t = texto.toLowerCase().replace(/(\\d),(\\d)/g, '$1.$2');\n  if (INGRESO.test(t) || AGENDA.test(t) || OTROS.test(t) || /[?¿]/.test(t)) return null;\n  const nums = t.match(/\\d+(?:\\.\\d{1,2})?/g);\n  if (!nums || nums.length !== 1) return null;           // sin número o varios números → IA\n  const monto = parseFloat(nums[0]);\n  if (!(monto > 0)) return null;\n  let resto = t.replace(nums[0], ' ');\n  let dias = 0;\n  if (w('anteayer').test(resto)) { dias = 2; resto = resto.replace(/anteayer/, ' '); }\n  else if (w('ayer').test(resto)) { dias = 1; resto = resto.replace(/ayer/, ' '); }\n  resto = resto.replace(/s\\/\\.?/g, ' ')\n    .replace(new RegExp(`(^|[^${L}])(soles|sol|so|lucas|luca|pe|pen)(?=$|[^${L}])`, 'g'), ' ')\n    .replace(/\\s+/g, ' ').trim()\n    .replace(/^(en|de|por|para|del)\\s+/, '').trim();\n  if (!resto) return { monto, descripcion: null, categoria: 'Otros', dias_atras: dias };\n  const categoria = Object.keys(REGLAS).find(c => REGLAS[c].test(resto));\n  if (!categoria) return null;                            // motivo raro → IA\n  return { monto, descripcion: resto.slice(0, 200), categoria, dias_atras: dias };\n}\n\nconst out = [];\nfor (const item of $input.all()) {\n  const m = item.json.message;\n  if (!m || !m.chat) continue;\n  const base = { chat_id: m.chat.id, message_id: m.message_id };\n\n  // Modo configuración: si aún no pusiste tu chat_id, el bot te lo dice\n  if (CHAT_ID === 'TU_CHAT_ID') {\n    out.push({ json: { ...base, ruta: 3, texto: `⚙️ Tu chat_id es: <code>${m.chat.id}</code>\\nReemplaza TU_CHAT_ID por ese número en todos los nodos que tengan <code>const CHAT_ID</code> (Contador, Recordatorios, Correos, Sheets y Alertas).` } });\n    continue;\n  }\n  // Ignora a cualquier otra persona que le escriba al bot\n  if (String(m.chat.id) !== String(CHAT_ID)) continue;\n\n  const caption = (m.caption || '').trim();\n  if (m.photo && m.photo.length) {\n    const foto = m.photo[m.photo.length - 1]; // la de mayor resolución\n    out.push({ json: { ...base, ruta: 0, tipo: 'foto', file_id: foto.file_id, texto: caption } });\n  } else if (m.document && /^image\\//.test(m.document.mime_type || '')) {\n    out.push({ json: { ...base, ruta: 0, tipo: 'foto', file_id: m.document.file_id, texto: caption } });\n  } else if (m.voice || m.audio) {\n    const a = m.voice || m.audio;                          // 🎙️ nota de voz\n    out.push({ json: { ...base, ruta: 0, tipo: 'voz', file_id: a.file_id, mime: a.mime_type || 'audio/ogg', texto: caption } });\n  } else if (typeof m.text === 'string' && /^\\/excel(@\\w+)?(\\s|$)/i.test(m.text.trim())) {\n    out.push({ json: { ...base, ruta: 6, tipo: 'comando', texto: m.text.trim() } });  // 📄 archivo Excel\n  } else if (typeof m.text === 'string' && /^\\/agenda(@\\w+)?(\\s|$)/i.test(m.text.trim())) {\n    out.push({ json: { ...base, ruta: 5, tipo: 'comando', texto: m.text.trim() } });  // 📅 necesita Google Calendar\n  } else if (typeof m.text === 'string' && m.text.trim().startsWith('/')) {\n    out.push({ json: { ...base, ruta: 1, tipo: 'comando', texto: m.text.trim() } });\n  } else if (typeof m.text === 'string' && m.text.trim()) {\n    const texto = m.text.trim();\n    const r = rapido(texto);\n    if (r) out.push({ json: { ...base, ruta: 4, tipo: 'texto', texto, rapido: r } });   // sin IA ⚡\n    else out.push({ json: { ...base, ruta: 2, tipo: 'texto', texto } });              // con IA 🤖\n  }\n}\nreturn out;\n"
+      },
+      "id": "c1766c6e-be0c-096d-847b-c949eed36dcc",
+      "name": "Clasificar mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 7,
+        "output": "={{ $json.ruta }}"
+      },
+      "id": "4d22820f-2b59-b337-a33f-e611b51d0f19",
+      "name": "Ruta mensaje",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        64,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.file_id }}",
+        "additionalFields": {}
+      },
+      "id": "589eaa7e-4702-25ff-218f-846a85022c5f",
+      "name": "Descargar foto",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        304,
+        16
+      ],
+      "webhookId": "d9d260b4-99ab-49a2-3b9b-6d6b0b4fef1b"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Clasificar mensaje').first().json;\nconst CATEGORIAS = 'Comida (menú, restaurantes, snacks, delivery, mercado), Transporte (taxi, Uber, InDrive, bus, Metropolitano, combustible, peaje), Ocio (cine, salidas, juegos, bebidas, conciertos, streaming), Compras (ropa, tecnología, artículos personales), Salud (farmacia, consultas, gimnasio), Educación (cursos, libros, universidad, copias), Servicios (celular, internet, luz, agua, suscripciones de software), Hogar (casa, limpieza, muebles), Otros';\nconst ahoraL = $now.setZone('America/Lima').setLocale('es');\nconst hoy = ahoraL.toFormat('yyyy-MM-dd');\nconst ahora = ahoraL.toFormat(\"yyyy-MM-dd HH:mm (cccc d 'de' LLLL)\");\n\nconst CHAT = Number(ctx.chat_id);\nconst REGLAS = `Ahora es ${ahora}, hora de Lima.\nResponde SOLO un JSON con esta forma (usa null en los campos que no apliquen):\n{\"tipo\": \"gasto\"|\"ingreso\"|\"recordatorio\"|\"tarea\"|\"evento\"|\"deuda\"|\"meta\"|\"ahorro\"|\"pregunta\"|\"otro\",\n \"monto\": number|null, \"descripcion\": string|null, \"categoria\": string, \"dias_atras\": integer,\n \"gastos\": [{\"monto\": number, \"descripcion\": string|null, \"categoria\": string, \"dias_atras\": integer}]|null,\n \"texto\": string|null, \"cuando\": \"YYYY-MM-DDTHH:MM\"|null, \"repetir\": \"diario\"|\"semanal\"|\"mensual\"|\"laborables\"|null,\n \"vence\": \"YYYY-MM-DD\"|null, \"prioridad\": \"alta\"|\"media\"|\"baja\"|null,\n \"tareas\": [{\"texto\": string, \"vence\": \"YYYY-MM-DD\"|null, \"prioridad\": \"alta\"|\"media\"|\"baja\"}]|null,\n \"titulo\": string|null, \"inicio\": string|null, \"fin\": string|null, \"todo_el_dia\": boolean, \"lugar\": string|null,\n \"persona\": string|null, \"movimiento\": \"le_preste\"|\"me_prestaron\"|\"me_pagaron\"|\"le_pague\"|null,\n \"nombre\": string|null, \"objetivo\": number|null, \"fecha_limite\": \"YYYY-MM-DD\"|null, \"meta\": string|null,\n \"comando\": string|null, \"sql\": string|null, \"respuesta\": string|null,\n \"transcripcion\": string|null}\n\nCómo elegir el tipo:\n- \"gasto\": el usuario YA pagó o gastó dinero (\"15 almuerzo\", \"pagué la luz 80\").\n- \"ingreso\": el usuario RECIBIÓ dinero (sueldo, le pagaron, le yapearon, cobró, reembolso, vendió algo). OJO: si es un pago de una deuda que alguien tenía con él, es \"deuda\".\n- \"recordatorio\": pide que le recuerden o avisen algo en un momento (\"recuérdame pagar la luz el viernes\", \"avísame en 20 minutos\", \"todos los días a las 10pm tomar agua\").\n- \"tarea\": un pendiente por hacer, sin hora exacta (\"tengo que llamar al banco\", \"pendiente: comprar regalo\").\n- \"evento\": una cita, reunión, clase, salida o cumpleaños con fecha para el calendario (\"reunión con Carlos el martes 3pm\", \"cumpleaños de mamá el 12 de octubre\").\n- \"deuda\": préstamos entre personas (\"le presté 50 a Juan\", \"le debo 30 a Ana\", \"Juan me pagó 20 de lo que me debía\", \"le pagué a Ana lo que le debía (30)\").\n- \"meta\": quiere crear una meta de ahorro (\"quiero ahorrar 2000 para una laptop para diciembre\").\n- \"ahorro\": separó/ahorró dinero para una meta (\"ahorré 100 para la laptop\", \"separé 50 para el viaje\").\n- \"pregunta\": pregunta algo o conversa: sobre sus datos (\"cuánto gasté en uber este mes\", \"qué tareas tengo hoy\"), sobre el bot (\"para qué sirves\", \"cómo registro un gasto\") o charla (\"hola\", \"gracias\").\n- \"otro\": no se entiende.\n\nReglas de gasto/ingreso:\n- monto: el importe en soles, con punto decimal. Acepta \"5\", \"5 soles\", \"5 so\", \"s/5\", \"S/. 12.50\", \"12,5\", \"15 lucas\", \"mil quinientos\".\n- descripcion: el motivo en pocas palabras y en minúsculas (ej: \"almuerzo\", \"taxi a la u\", \"sueldo de septiembre\").\n- categoria: solo para gastos, exactamente una de: ${CATEGORIAS}. Si no hay motivo claro, o si es un ingreso, usa \"Otros\".\n- dias_atras: 1 si dice \"ayer\", 2 si dice \"anteayer\", 0 en cualquier otro caso.\n- Si menciona VARIOS gastos en el mismo mensaje (\"15 almuerzo, 10 taxi y 5 gaseosa\", \"ayer gasté 20 en cine y 12 en uber\"), usa tipo \"gasto\" y pon cada uno por separado en \"gastos\" (lista) con su monto, descripcion, categoria y dias_atras; deja \"monto\" en null.\nReglas de recordatorio:\n- texto: qué hay que recordar, corto y sin \"recuérdame\". cuando: fecha y hora local. Si no dice hora usa 09:00. \"en X minutos/horas\" se suma a la hora actual. Si solo dice una hora y ya pasó hoy, es mañana. \"el viernes\" = el próximo viernes.\n- repetir: \"diario\", \"semanal\", \"mensual\", \"laborables\" (lunes a viernes) o null si es una sola vez.\nReglas de tarea: texto corto; vence si menciona día o fecha límite (\"hoy\" = la fecha de hoy); prioridad \"alta\" si urgente/importante, \"baja\" si cuando pueda, si no \"media\".\n- Si menciona VARIAS tareas en el mismo mensaje (\"hoy tengo que lavar la ropa, estudiar y llamar a mamá\"), pon cada una por separado en \"tareas\" (lista), cada una con su vence y prioridad, y deja \"texto\" en null.\nReglas de evento: titulo corto; lugar si lo menciona; inicio y fin \"YYYY-MM-DDTHH:MM\" (sin duración: fin = inicio + 1 hora); todo_el_dia true si no tiene hora y entonces inicio/fin van como \"YYYY-MM-DD\".\nReglas de deuda: persona = nombre de la otra persona (ej: \"Juan\"); monto; movimiento: \"le_preste\" (el usuario prestó o pagó algo por la otra persona), \"me_prestaron\" (el usuario quedó debiendo), \"me_pagaron\" (la otra persona le devolvió), \"le_pague\" (el usuario devolvió lo que debía). descripcion si hay motivo.\nReglas de meta: nombre corto (ej: \"laptop\"), objetivo = monto a juntar, fecha_limite si la menciona (fin de ese mes).\nReglas de ahorro: monto y meta = nombre de la meta si la menciona (ej: \"laptop\"), si no null.\n\nReglas de pregunta (llena SOLO uno de comando, sql o respuesta):\n- comando: si lo que pide ya lo hace exacto un comando, usa uno de: /agenda, /tareas, /recordatorios, /balance, /hoy, /ayer, /semana, /mes, /mesanterior, /ultimos, /presupuestos, /recurrentes, /deudas, /metas, /grafico, /grafico meses, /grafico dias, /excel, /excel mesanterior, /excel todo, /ayuda.\n- sql: si necesita consultar sus datos de otra forma, escribe UNA sola consulta SELECT de PostgreSQL (sin punto y coma) sobre estas tablas, SIEMPRE con chat_id = ${CHAT}, y con fechas en hora de Lima: usa (fecha AT TIME ZONE 'America/Lima') y compara días con (now() AT TIME ZONE 'America/Lima')::date. Devuelve pocas columnas con nombres claros y máximo 50 filas.\n  · gastos(id, fecha timestamptz, monto numeric, descripcion text, categoria text, metodo text [manual|yape|voz|correo|recurrente], destinatario text, chat_id)\n  · ingresos(id, fecha timestamptz, monto numeric, descripcion text, chat_id)\n  · presupuestos(chat_id, categoria text, monto numeric)  -- límite mensual por categoría\n  · recurrentes(id, chat_id, nombre text, monto numeric, categoria text, dia smallint, activo boolean)\n  · recordatorios(id, chat_id, texto text, cuando timestamptz, repetir text, activo boolean)\n  · tareas(id, chat_id, texto text, prioridad smallint [1 alta, 2 media, 3 baja], vence date, hecha boolean, hecha_en timestamptz)\n  · deudas(id, chat_id, persona text, monto numeric [positivo = le deben al usuario, negativo = el usuario debe], descripcion text, fecha timestamptz)  -- el saldo con alguien es sum(monto) agrupado por lower(persona)\n  · metas(id, chat_id, nombre text, objetivo numeric, ahorrado numeric, fecha_limite date, activa boolean)\n  Categorías de gastos: Comida, Transporte, Ocio, Compras, Salud, Educación, Servicios, Hogar, Otros. Para buscar texto usa ILIKE.\n- respuesta: si no necesita datos, responde tú directamente: breve (máx 5 líneas), cálido y natural, en español peruano, tuteando. Usa esta info del bot si hace falta:\n  \"Soy tu asistente personal en Telegram. Registro tus gastos (escribiendo, con foto del Yape, con audio o solos desde los correos del BCP/Yape), tus ingresos, presupuestos, pagos recurrentes, deudas y metas de ahorro. También te recuerdo cosas, anoto tus tareas y creo eventos en tu Google Calendar. Cada mañana a las 7 te mando tu agenda, a medianoche tus gastos del día, los lunes el reporte de la semana y los domingos una revisión semanal. Puedes preguntarme cosas como 'cuánto gasté en comida este mes' o pedirme un gráfico o un Excel. Todos los comandos: /ayuda.\"`;\n\nasync function binario(mimeDefault, prefijo) {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  let mime = ($input.first().binary && $input.first().binary.data && $input.first().binary.data.mimeType) || '';\n  if (!mime.startsWith(prefijo)) mime = (ctx.mime && ctx.mime.startsWith(prefijo)) ? ctx.mime : mimeDefault;\n  return { inline_data: { mime_type: mime, data: buf.toString('base64') } };\n}\n\nlet parts;\nif (ctx.tipo === 'foto') {\n  const prompt = `Eres el lector de comprobantes de un bot de finanzas personales en Perú (moneda: soles). Hoy es ${hoy}.\nLa imagen puede ser una captura de un pago (Yape, Plin, transferencia), un voucher, una boleta o ticket de compra, o cualquier imagen donde se indique claramente un monto.\nTexto que el usuario envió con la foto (puede estar vacío): \"\"\"${ctx.texto}\"\"\"\nResponde SOLO un JSON con esta forma:\n{\"tipo\": \"gasto\"|\"ingreso\"|\"otro\", \"monto\": number|null, \"destinatario\": string|null, \"fecha\": \"YYYY-MM-DD\"|null, \"hora\": \"HH:MM\"|null, \"descripcion\": string|null, \"categoria\": string}\nReglas:\n- tipo: \"gasto\" si es un pago ENVIADO por el usuario o una compra; \"ingreso\" si es un pago RECIBIDO (le yapearon o le transfirieron al usuario); \"otro\" si la imagen no es un comprobante.\n- monto: importe en soles, con punto decimal.\n- destinatario: nombre de la otra persona o comercio (a quién se pagó, o quién le pagó), tal como aparece.\n- fecha y hora de la operación (hora en formato 24h), si aparecen en la imagen.\n- descripcion: si el usuario escribió un texto úsalo como motivo (en minúsculas y corto); si no, deduce algo breve o pon null.\n- categoria: solo para gastos, exactamente una de: ${CATEGORIAS}. Para ingresos usa \"Otros\".`;\n  parts = [{ text: prompt }, await binario.call(this, 'image/jpeg', 'image/')];\n} else if (ctx.tipo === 'voz') {\n  const prompt = `Eres el asistente personal (finanzas y agenda) de un usuario en Perú (moneda: soles).\nEl usuario te mandó la nota de voz adjunta (español de Perú). Primero transcríbela literalmente y luego analízala.\n${REGLAS}\n- transcripcion: el texto literal de lo que dijo en el audio.`;\n  parts = [{ text: prompt }, await binario.call(this, 'audio/ogg', 'audio/')];\n} else {\n  const prompt = `Eres el asistente personal (finanzas y agenda) de un usuario en Perú (moneda: soles).\nAnaliza el mensaje del usuario.\n${REGLAS}\n- transcripcion: null.\nMensaje: \"\"\"${ctx.texto}\"\"\"`;\n  parts = [{ text: prompt }];\n}\n\nreturn [{\n  json: {\n    body: {\n      contents: [{ role: 'user', parts }],\n      generationConfig: { temperature: 0, responseMimeType: 'application/json' }\n    }\n  }\n}];\n"
+      },
+      "id": "f36aa2a9-a18f-f809-2ce8-729ed4f60186",
+      "name": "Preparar IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "473717be-49e7-75d9-1ae6-b5337096b06c",
+      "name": "Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        752,
+        128
+      ],
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Clasificar mensaje').first().json;\nconst r = $input.first().json;\nconst CATS = ['Comida', 'Transporte', 'Ocio', 'Compras', 'Salud', 'Educación', 'Servicios', 'Hogar', 'Otros'];\nconst norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\n// 1) Leer el JSON que devolvió Gemini\nlet data = null;\ntry {\n  const txt = r.candidates[0].content.parts.map(p => p.text || '').join('');\n  data = JSON.parse(txt.replace(/```json|```/g, '').trim());\n  if (Array.isArray(data)) data = data[0];\n} catch (e) { data = null; }\n\n// 1b) Camino rápido (ya viene interpretado, sin IA)\nif (r.rapido) data = { tipo: 'gasto', ...r.rapido };\nif (data && !data.tipo && 'es_gasto' in data) data.tipo = data.es_gasto ? 'gasto' : 'otro';\n\n// 2) Plan B sin IA (si Gemini falla): saca el número del texto\nconst PARECE_AGENDA = /recu[eé]rd|av[ií]s|alarma|tarea|pendiente|tengo que|debo|debe|prest|ahorr|meta|reuni[oó]n|cita|agenda|evento|cumplea|cu[aá]nt|qu[eé] |[?¿]/i;\nif (!data && ctx.tipo === 'texto' && !PARECE_AGENDA.test(ctx.texto)) {\n  const m = ctx.texto.replace(',', '.').match(/(\\d+(?:\\.\\d{1,2})?)/);\n  if (m) {\n    const desc = ctx.texto.replace(/,/g, '.').replace(m[0], '')\n      .replace(/s\\/\\.?/gi, ' ')\n      .replace(/(^|\\s)(soles|sol|so|lucas|luca)(?=\\s|$)/gi, ' ')\n      .replace(/\\s+/g, ' ').trim().toLowerCase();\n    data = { tipo: 'gasto', monto: parseFloat(m[1]), descripcion: desc || null, categoria: 'Otros', dias_atras: 0 };\n  }\n}\n\nconst tipo = data ? norm(data.tipo) : '';\nconst chatId = Number(ctx.chat_id);\n\n// Solo deja pasar una consulta de lectura sobre tus datos (la envuelve para que no pueda modificar nada)\nfunction sqlSeguro(s, chat) {\n  const t = s.trim().replace(/;+\\s*$/, '');\n  if (!/^(select|with)\\b/i.test(t) || t.includes(';')) return null;\n  if (/\\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|vacuum|comment|call|execute|prepare|listen|notify|lock|set_config|current_setting|dblink)\\b|\\bpg_\\w+|information_schema/i.test(t)) return null;\n  if (!new RegExp(`chat_id\\\\s*=\\\\s*${chat}\\\\b`).test(t)) return null;\n  return `SELECT COALESCE(json_agg(t), '[]'::json) AS filas FROM (SELECT * FROM (${t}) s LIMIT 50) t`;\n}\n// Suma un ahorro a la meta que coincida por nombre (o a la única meta activa)\nfunction sqlAhorro(chat, monto, meta) {\n  return `\nWITH m AS (\n  SELECT id FROM metas\n  WHERE chat_id = ${chat} AND activa\n    AND ((${q(meta)}::text IS NOT NULL AND lower(nombre) LIKE '%' || ${q(meta)} || '%')\n         OR (${q(meta)}::text IS NULL AND (SELECT count(*) FROM metas WHERE chat_id = ${chat} AND activa) = 1))\n  ORDER BY id LIMIT 1\n), u AS (\n  UPDATE metas SET ahorrado = ahorrado + ${monto} WHERE id = (SELECT id FROM m) RETURNING *\n)\nSELECT 'ahorro' AS clase, ${chat}::bigint AS chat_id, ${monto} AS monto, (SELECT row_to_json(u) FROM u) AS meta,\n       COALESCE((SELECT json_agg(x) FROM (SELECT id, nombre FROM metas WHERE chat_id = ${chat} AND activa ORDER BY id) x), '[]'::json) AS metas;`;\n}\nconst ZONA = { zone: 'America/Lima' };\nconst ahora = $now.setZone('America/Lima');\nconst errorAgenda = msg => [{ json: { ruta: 1, chat_id: ctx.chat_id, texto: msg } }];\n\n// 3a) RECORDATORIO → tabla recordatorios\nif (tipo === 'recordatorio') {\n  const texto = String(data.texto || data.descripcion || '').trim().slice(0, 300);\n  let dt = DateTime.fromISO(String(data.cuando || ''), ZONA);\n  if (!texto || !dt.isValid) return errorAgenda('No entendí qué o cuándo recordarte 🤔\\nEj: <i>recuérdame pagar la luz el viernes a las 6pm</i>');\n  const REP = ['diario', 'semanal', 'mensual', 'laborables'];\n  const repetir = REP.includes(norm(data.repetir)) ? norm(data.repetir) : null;\n  const paso = repetir === 'semanal' ? { weeks: 1 } : (repetir === 'mensual' ? { months: 1 } : { days: 1 });\n  for (let k = 0; k < 400 && dt < ahora.minus({ minutes: 1 }); k++) dt = dt.plus(paso);   // nunca en el pasado\n  if (repetir === 'laborables') { while (dt.weekday > 5) dt = dt.plus({ days: 1 }); }\n  const sql = `\nWITH ins AS (\n  INSERT INTO recordatorios (chat_id, texto, cuando, repetir)\n  VALUES (${chatId}, ${q(texto)}, ${q(dt.toISO())}::timestamptz, ${q(repetir)}) RETURNING *\n)\nSELECT 'recordatorio' AS clase, ${chatId}::bigint AS chat_id, i.id, i.texto, i.repetir,\n       to_char(i.cuando AT TIME ZONE 'America/Lima', 'YYYY-MM-DD\"T\"HH24:MI') AS cuando_local\nFROM ins i;`;\n  return [{ json: { ruta: 0, sql } }];\n}\n\n// 3b) TAREA(S) → tabla tareas (acepta varias en un solo mensaje)\nif (tipo === 'tarea') {\n  const PRI = { alta: 1, media: 2, baja: 3 };\n  const lista = (Array.isArray(data.tareas) && data.tareas.length ? data.tareas : [data])\n    .map(t => ({\n      texto: String((t && (t.texto || t.descripcion)) || '').trim().slice(0, 300),\n      vence: /^\\d{4}-\\d{2}-\\d{2}$/.test((t && t.vence) || '') ? t.vence : (/^\\d{4}-\\d{2}-\\d{2}$/.test(data.vence || '') ? data.vence : null),\n      prioridad: PRI[norm(t && t.prioridad)] || PRI[norm(data.prioridad)] || 2,\n    }))\n    .filter(t => t.texto)\n    .slice(0, 20);\n  if (!lista.length) return errorAgenda('No entendí la tarea 🤔\\nEj: <i>tengo que llamar al banco el lunes</i> o /tarea llamar al banco');\n  const valores = lista.map(t => `(${chatId}, ${q(t.texto)}, ${t.prioridad}, ${q(t.vence)})`).join(',\\n    ');\n  const sql = `\nWITH ins AS (\n  INSERT INTO tareas (chat_id, texto, prioridad, vence) VALUES\n    ${valores}\n  RETURNING *\n)\nSELECT 'tarea' AS clase, ${chatId}::bigint AS chat_id,\n       (SELECT json_agg(json_build_object('id', id, 'texto', texto, 'prioridad', prioridad, 'vence', to_char(vence, 'YYYY-MM-DD')) ORDER BY id) FROM ins) AS nuevas,\n       (SELECT count(*) FROM tareas WHERE chat_id = ${chatId} AND NOT hecha)::int + (SELECT count(*) FROM ins)::int AS pendientes;`;\n  return [{ json: { ruta: 0, sql } }];\n}\n\n// 3c) EVENTO → Google Calendar (ruta 2) y luego un recordatorio 30 min antes\nif (tipo === 'evento') {\n  const titulo = String(data.titulo || data.texto || data.descripcion || '').trim().slice(0, 200);\n  const todoElDia = data.todo_el_dia === true || /^\\d{4}-\\d{2}-\\d{2}$/.test(String(data.inicio || ''));\n  let ini = DateTime.fromISO(String(data.inicio || ''), ZONA);\n  let fin = DateTime.fromISO(String(data.fin || ''), ZONA);\n  if (!titulo || !ini.isValid) return errorAgenda('No entendí el evento 🤔\\nEj: <i>reunión con Carlos el martes a las 3pm</i>');\n  let body;\n  if (todoElDia) {\n    ini = ini.startOf('day');\n    fin = (fin.isValid && fin > ini) ? fin.startOf('day').plus({ days: 1 }) : ini.plus({ days: 1 });\n    body = { start: { date: ini.toFormat('yyyy-MM-dd') }, end: { date: fin.toFormat('yyyy-MM-dd') } };\n  } else {\n    if (!fin.isValid || fin <= ini) fin = ini.plus({ hours: 1 });\n    body = {\n      start: { dateTime: ini.toFormat(\"yyyy-MM-dd'T'HH:mm:ss\"), timeZone: 'America/Lima' },\n      end: { dateTime: fin.toFormat(\"yyyy-MM-dd'T'HH:mm:ss\"), timeZone: 'America/Lima' },\n    };\n  }\n  body.summary = titulo;\n  if (data.lugar) body.location = String(data.lugar).slice(0, 200);\n  body.description = 'Creado desde Telegram (Contador)';\n  return [{ json: { ruta: 2, chat_id: chatId, evento: body, todo_el_dia: todoElDia, inicio_iso: ini.toISO(), titulo } }];\n}\n\n// 3d) DEUDA → tabla deudas (positivo = te deben · negativo = debes)\nif (tipo === 'deuda') {\n  const persona = String(data.persona || '').trim().replace(/\\s+/g, ' ').slice(0, 60);\n  const monto = Math.round(Number(data.monto) * 100) / 100;\n  const SIGNO = { le_preste: 1, le_pague: 1, me_prestaron: -1, me_pagaron: -1 };\n  const signo = SIGNO[norm(data.movimiento)];\n  if (!persona || !(monto > 0) || !signo) return errorAgenda('No entendí la deuda 🤔\\nEj: <i>le presté 50 a Juan</i>, <i>le debo 30 a Ana</i> o <i>Juan me pagó 20</i>');\n  const desc = data.descripcion ? String(data.descripcion).trim().toLowerCase().slice(0, 200) : null;\n  const sql = `\nWITH ins AS (\n  INSERT INTO deudas (chat_id, persona, monto, descripcion) VALUES (${chatId}, ${q(persona)}, ${signo * monto}, ${q(desc)}) RETURNING *\n)\nSELECT 'deuda' AS clase, ${chatId}::bigint AS chat_id, ${q(persona)} AS persona, ${q(norm(data.movimiento))} AS movimiento, ${monto} AS monto,\n       (SELECT COALESCE(sum(monto), 0) FROM deudas WHERE chat_id = ${chatId} AND lower(persona) = lower(${q(persona)})) + ${signo * monto} AS saldo\nFROM ins;`;\n  return [{ json: { ruta: 0, sql } }];\n}\n\n// 3e) META de ahorro → tabla metas\nif (tipo === 'meta') {\n  const nombre = String(data.nombre || data.descripcion || '').trim().toLowerCase().slice(0, 80);\n  const objetivo = Math.round(Number(data.objetivo || data.monto) * 100) / 100;\n  if (!nombre || !(objetivo > 0)) return errorAgenda('No entendí la meta 🤔\\nEj: <i>quiero ahorrar 2000 para una laptop para diciembre</i> o /meta 2000 laptop');\n  const limite = /^\\d{4}-\\d{2}-\\d{2}$/.test(data.fecha_limite || '') ? data.fecha_limite : null;\n  const sql = `\nWITH ins AS (\n  INSERT INTO metas (chat_id, nombre, objetivo, fecha_limite) VALUES (${chatId}, ${q(nombre)}, ${objetivo}, ${q(limite)}) RETURNING *\n)\nSELECT 'meta' AS clase, ${chatId}::bigint AS chat_id, i.id, i.nombre, i.objetivo, to_char(i.fecha_limite, 'YYYY-MM-DD') AS fecha_limite FROM ins i;`;\n  return [{ json: { ruta: 0, sql } }];\n}\n\n// 3f) AHORRO para una meta\nif (tipo === 'ahorro') {\n  const monto = Math.round(Number(data.monto) * 100) / 100;\n  if (!(monto > 0)) return errorAgenda('No entendí cuánto ahorraste 🤔\\nEj: <i>ahorré 100 para la laptop</i> o /ahorro 100 laptop');\n  const meta = data.meta ? String(data.meta).trim().toLowerCase().slice(0, 80) : null;\n  return [{ json: { ruta: 0, sql: sqlAhorro(chatId, monto, meta) } }];\n}\n\n// 3g) PREGUNTA → comando, consulta a tus datos o respuesta directa\nif (tipo === 'pregunta') {\n  const PERMITIDOS = ['/agenda', '/tareas', '/recordatorios', '/balance', '/hoy', '/ayer', '/semana', '/mes', '/mesanterior', '/ultimos',\n    '/presupuestos', '/recurrentes', '/deudas', '/metas', '/grafico', '/excel', '/ayuda'];\n  const cmd = String(data.comando || '').trim().toLowerCase();\n  if (cmd && PERMITIDOS.includes(cmd.split(/\\s+/)[0])) {\n    const base = { chat_id: chatId, tipo: 'comando', texto: cmd };\n    if (cmd.startsWith('/agenda')) return [{ json: { ...base, ruta: 4 } }];\n    if (cmd.startsWith('/excel')) return [{ json: { ...base, ruta: 5 } }];\n    return [{ json: { ...base, ruta: 3 } }];\n  }\n  const pregunta = ctx.tipo === 'voz' ? (data.transcripcion || '') : ctx.texto;\n  if (data.sql) {\n    const seguro = sqlSeguro(String(data.sql), chatId);\n    if (seguro) return [{ json: { ruta: 6, chat_id: chatId, pregunta, sql: seguro } }];\n  }\n  if (data.respuesta) {\n    const txt = esc(String(data.respuesta).slice(0, 1500)).replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>');\n    return [{ json: { ruta: 1, chat_id: chatId, texto: txt } }];\n  }\n  return errorAgenda('Uy, no supe cómo responder eso 😅 Prueba preguntándolo de otra forma, o mira /ayuda.');\n}\n\n// 3h) VARIOS GASTOS en un solo mensaje\nif (tipo === 'gasto' && Array.isArray(data.gastos) && data.gastos.filter(g => g && Number(g.monto) > 0).length > 1) {\n  const metodoM = ctx.tipo === 'voz' ? 'voz' : 'manual';\n  const originalM = ctx.tipo === 'voz' ? (data.transcripcion ? String(data.transcripcion).slice(0, 500) : '(nota de voz)') : ctx.texto;\n  const lista = data.gastos.filter(g => g && Number(g.monto) > 0).slice(0, 20).map(g => {\n    const d = Number(g.dias_atras) > 0 && Number(g.dias_atras) <= 7 ? parseInt(g.dias_atras, 10) : 0;\n    return {\n      monto: Math.round(Number(g.monto) * 100) / 100,\n      desc: g.descripcion ? String(g.descripcion).trim().toLowerCase().slice(0, 200) : null,\n      cat: CATS.find(c => norm(c) === norm(g.categoria)) || 'Otros',\n      fecha: d ? `(now() - interval '${d} day')` : 'now()',\n    };\n  });\n  const TZm = \"'America/Lima'\";\n  const INI_DIAm = `(date_trunc('day', now() AT TIME ZONE ${TZm}) AT TIME ZONE ${TZm})`;\n  const INI_MESm = `(date_trunc('month', now() AT TIME ZONE ${TZm}) AT TIME ZONE ${TZm})`;\n  const valores = lista.map(g => `(${g.fecha}, ${g.monto}, ${q(g.desc)}, ${q(g.cat)}, ${q(metodoM)}, ${chatId}, ${q(originalM)})`).join(',\\n    ');\n  const sql = `\nWITH ins AS (\n  INSERT INTO gastos (fecha, monto, descripcion, categoria, metodo, chat_id, mensaje_original) VALUES\n    ${valores}\n  RETURNING *\n)\nSELECT 'gastos' AS clase, ${chatId}::bigint AS chat_id,\n  (SELECT json_agg(json_build_object('monto', monto, 'descripcion', descripcion, 'categoria', categoria,\n      'fecha', to_char(fecha AT TIME ZONE ${TZm}, 'DD/MM HH24:MI')) ORDER BY id) FROM ins) AS nuevos,\n  (SELECT sum(monto) FROM ins) AS total,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${chatId} AND fecha >= ${INI_DIAm})\n    + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_DIAm}) AS total_hoy,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${chatId} AND fecha >= ${INI_MESm})\n    + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_MESm}) AS total_mes,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT p.categoria, p.monto AS presupuesto,\n       (SELECT COALESCE(sum(g.monto), 0) FROM gastos g WHERE g.chat_id = p.chat_id AND g.categoria = p.categoria AND g.fecha >= ${INI_MESm})\n       + (SELECT COALESCE(sum(i.monto), 0) FROM ins i WHERE i.categoria = p.categoria AND i.fecha >= ${INI_MESm}) AS gastado\n     FROM presupuestos p WHERE p.chat_id = ${chatId} AND p.categoria IN (SELECT categoria FROM ins)) x), '[]'::json) AS presupuestos;`;\n  return [{ json: { ruta: 0, sql } }];\n}\n\n// 3i) No es gasto ni ingreso → responder directo\nif (!data || !['gasto', 'ingreso'].includes(tipo) || !(Number(data.monto) > 0)) {\n  let msg;\n  if (ctx.tipo === 'foto') {\n    msg = 'No pude leer un pago en esa imagen 🤔\\nMándame la captura del Yape o escribe el monto, ej: <i>almuerzo 15</i>';\n  } else if (ctx.tipo === 'voz') {\n    msg = 'No entendí qué hacer con el audio 🤔';\n    if (data && data.transcripcion) msg += `\\nEntendí: <i>\"${esc(String(data.transcripcion).slice(0, 300))}\"</i>`;\n    msg += '\\nPrueba con <i>\"gasté quince soles en almuerzo\"</i> o <i>\"recuérdame llamar a mamá a las seis\"</i>.';\n  } else {\n    msg = 'No entendí eso 🤔\\nPrueba con: <i>15 almuerzo</i>, <i>me pagaron 1500</i>, <i>recuérdame llamar al banco mañana a las 10</i>, <i>tengo que comprar un regalo</i> o <i>reunión con Carlos el martes 3pm</i>.\\nUsa /ayuda para ver los comandos.';\n  }\n  if (!data && r.error) msg += '\\n\\n⚠️ La IA no respondió: ' + esc(String(r.error.message || r.error).slice(0, 150));\n  return [{ json: { ruta: 1, chat_id: ctx.chat_id, texto: msg } }];\n}\n\n// 4) Datos comunes\nconst chat = Number(ctx.chat_id);\nconst monto = Math.round(Number(data.monto) * 100) / 100;\nconst desc0 = data.descripcion ? String(data.descripcion).trim().toLowerCase().slice(0, 200) : null;\nconst destinatario = data.destinatario ? String(data.destinatario).trim().slice(0, 120) : null;\nconst metodo = ctx.tipo === 'foto' ? 'yape' : (ctx.tipo === 'voz' ? 'voz' : 'manual');\nconst original = ctx.tipo === 'voz'\n  ? (data.transcripcion ? String(data.transcripcion).slice(0, 500) : '(nota de voz)')\n  : ctx.texto;\n\nlet fechaExpr = 'now()';\nif (ctx.tipo === 'foto' && /^\\d{4}-\\d{2}-\\d{2}$/.test(data.fecha || '')) {\n  const hora = /^\\d{2}:\\d{2}$/.test(data.hora || '') ? data.hora : '12:00';\n  const f = DateTime.fromISO(`${data.fecha}T${hora}`, { zone: 'America/Lima' });\n  const dias = f.isValid ? $now.diff(f, 'days').days : 999;\n  if (dias >= -1 && dias <= 60) fechaExpr = `(${q(data.fecha + ' ' + hora)}::timestamp AT TIME ZONE 'America/Lima')`;\n} else if (Number(data.dias_atras) > 0 && Number(data.dias_atras) <= 7) {\n  fechaExpr = `(now() - interval '${parseInt(data.dias_atras, 10)} day')`;\n}\n\nconst TZ = \"'America/Lima'\";\nconst INI_DIA = `(date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\n\n// 5a) INGRESO\nif (tipo === 'ingreso') {\n  const desc = desc0 || (destinatario ? 'de ' + destinatario.toLowerCase() : null);\n  const sql = `\nWITH ins AS (\n  INSERT INTO ingresos (fecha, monto, descripcion, chat_id)\n  VALUES (${fechaExpr}, ${monto}, ${q(desc)}, ${chat})\n  RETURNING *\n)\nSELECT 'ingreso' AS clase, 1 AS insertado, i.chat_id, i.monto, i.descripcion, ${q(metodo)} AS metodo,\n       to_char(i.fecha AT TIME ZONE ${TZ}, 'DD/MM HH24:MI') AS fecha_local,\n       (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = i.chat_id AND fecha >= ${INI_MES})\n         + CASE WHEN i.fecha >= ${INI_MES} THEN i.monto ELSE 0 END AS ingresos_mes,\n       (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = i.chat_id AND fecha >= ${INI_MES}) AS gastos_mes\nFROM ins i;`;\n  return [{ json: { ruta: 0, sql } }];\n}\n\n// 5b) GASTO\nconst cat = CATS.find(c => norm(c) === norm(data.categoria)) || 'Otros';\nconst sql = `\nWITH nuevo AS (\n  SELECT ${fechaExpr}::timestamptz AS fecha, ${monto}::numeric AS monto, ${q(desc0)}::text AS descripcion,\n         ${q(cat)}::text AS categoria, ${q(metodo)}::text AS metodo, ${q(destinatario)}::text AS destinatario,\n         ${chat}::bigint AS chat_id, ${q(original)}::text AS mensaje_original\n), ins AS (\n  INSERT INTO gastos (fecha, monto, descripcion, categoria, metodo, destinatario, chat_id, mensaje_original)\n  SELECT n.* FROM nuevo n\n  WHERE NOT (n.metodo = 'yape' AND EXISTS (\n    SELECT 1 FROM gastos g\n    WHERE g.chat_id = n.chat_id AND g.metodo = 'yape' AND g.monto = n.monto\n      AND g.fecha = n.fecha AND COALESCE(g.destinatario, '') = COALESCE(n.destinatario, '')))\n  RETURNING *\n)\nSELECT 'gasto' AS clase, (SELECT count(*) FROM ins)::int AS insertado,\n       n.chat_id, n.monto, n.descripcion, n.categoria, n.metodo, n.destinatario,\n       to_char(n.fecha AT TIME ZONE ${TZ}, 'DD/MM HH24:MI') AS fecha_local,\n       (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = n.chat_id AND fecha >= ${INI_DIA})\n         + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_DIA}) AS total_hoy,\n       (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = n.chat_id AND fecha >= ${INI_MES})\n         + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_MES}) AS total_mes,\n       (SELECT monto FROM presupuestos WHERE chat_id = n.chat_id AND categoria = n.categoria) AS presupuesto,\n       (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = n.chat_id AND categoria = n.categoria AND fecha >= ${INI_MES})\n         + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_MES}) AS gastado_cat_mes\nFROM nuevo n;`;\n\nreturn [{ json: { ruta: 0, sql } }];\n"
+      },
+      "id": "1a476cb5-f7f2-d888-d6c8-165580f9cf7f",
+      "name": "Interpretar respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 7,
+        "output": "={{ $json.ruta }}"
+      },
+      "id": "b6c985b2-06a2-3a6b-cf77-0fe4d0ffe33a",
+      "name": "¿Guardar?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1184,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "timeout": 60000
+        },
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.evento) }}"
+      },
+      "id": "5de09a2b-ee69-78a3-772e-40fae56bd548",
+      "name": "Crear evento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1408,
+        -160
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Después de crear el evento en Google Calendar: arma la confirmación y un aviso 30 min antes\nconst ev = $('Interpretar respuesta').first().json;\nconst r = $input.first().json;\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst chat = Number(ev.chat_id);\n\nif (!r || r.error || !r.id) {\n  const e = r && r.error;\n  const detalle = e ? String(e.message || e.description || JSON.stringify(e)) : 'Google Calendar no respondió';\n  return [{ json: { sql: `SELECT 'evento_error' AS clase, ${chat}::bigint AS chat_id, ${q(detalle.slice(0, 200))} AS detalle;` } }];\n}\n\nconst ini = DateTime.fromISO(ev.inicio_iso).setZone('America/Lima').setLocale('es');\nlet cuandoTxt, aviso, textoAviso;\nif (ev.todo_el_dia) {\n  cuandoTxt = ini.toFormat(\"cccc d 'de' LLLL\") + ' (todo el día)';\n  aviso = ini.set({ hour: 8, minute: 0 });\n  textoAviso = `📅 Hoy: ${ev.titulo}`;\n} else {\n  const fin = DateTime.fromISO(ev.evento.end.dateTime, { zone: 'America/Lima' });\n  cuandoTxt = ini.toFormat(\"cccc d 'de' LLLL, HH:mm\") + (fin.isValid ? '–' + fin.toFormat('HH:mm') : '');\n  aviso = ini.minus({ minutes: 30 });\n  textoAviso = `📅 En 30 min: ${ev.titulo}${r.location ? ' (' + r.location + ')' : ''}`;\n}\nconst crearAviso = aviso > $now.plus({ minutes: 1 });\n\nconst sql = `\nWITH ins AS (\n  ${crearAviso\n    ? `INSERT INTO recordatorios (chat_id, texto, cuando) VALUES (${chat}, ${q(textoAviso)}, ${q(aviso.toISO())}::timestamptz) RETURNING id`\n    : 'SELECT NULL::bigint AS id WHERE false'}\n)\nSELECT 'evento' AS clase, ${chat}::bigint AS chat_id, ${q(ev.titulo)} AS titulo, ${q(cuandoTxt)} AS cuando_txt,\n       ${q(r.location || null)} AS lugar, ${q(r.htmlLink || null)} AS link, ${ev.todo_el_dia ? 'true' : 'false'} AS todo_el_dia,\n       (SELECT count(*) FROM ins)::int AS con_aviso;`;\n\nreturn [{ json: { sql } }];\n"
+      },
+      "id": "b414e5cb-a4fc-80a2-390c-bec958252871",
+      "name": "SQL evento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {}
+      },
+      "id": "04f33d15-0363-43b5-2deb-ef155019d1fb",
+      "name": "Guardar registro",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1632,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst S = n => 'S/ ' + Number(n || 0).toFixed(2);\nconst firmado = n => (Number(n) < 0 ? '−' : '') + S(Math.abs(Number(n)));\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst EMOJI = { 'Comida': '🍔', 'Transporte': '🚕', 'Ocio': '🎮', 'Compras': '🛍️', 'Salud': '💊', 'Educación': '📚', 'Servicios': '💡', 'Hogar': '🏠', 'Otros': '📦' };\n\n// Línea de presupuesto (si la categoría tiene uno)\nfunction lineaPresupuesto(cat, presupuesto, gastado) {\n  if (presupuesto === null || presupuesto === undefined) return [];\n  const p = Number(presupuesto), g = Number(gastado);\n  if (!(p > 0)) return [];\n  const pct = g / p * 100;\n  if (pct >= 100) return ['', `🚨 <b>Te pasaste</b> del presupuesto de ${esc(cat)}: ${S(g)} de ${S(p)} (${pct.toFixed(0)}%)`];\n  if (pct >= 80) return ['', `⚠️ Llevas el ${pct.toFixed(0)}% del presupuesto de ${esc(cat)}: ${S(g)} de ${S(p)}. Te quedan ${S(p - g)}.`];\n  return [`🎯 ${esc(cat)}: ${S(g)} de ${S(p)} (${pct.toFixed(0)}%)`];\n}\n\nconst PRIO = { 1: '🔴', 2: '🟡', 3: '⚪' };\nconst REP = { diario: 'todos los días', semanal: 'cada semana', mensual: 'cada mes', laborables: 'de lunes a viernes' };\nconst fechaLarga = iso => {\n  const d = DateTime.fromISO(String(iso), { zone: 'America/Lima' }).setLocale('es');\n  return d.isValid ? d.toFormat(\"cccc d 'de' LLLL\") : String(iso);\n};\n\nconst titulo = s => String(s || '').replace(/(^|\\s)\\S/g, c => c.toUpperCase());\nconst saldoTexto = (persona, saldo) => {\n  const v = Number(saldo);\n  if (Math.abs(v) < 0.005) return `✅ Con ${esc(titulo(persona))} están a mano.`;\n  return v > 0 ? `💚 ${esc(titulo(persona))} te debe <b>${S(v)}</b>` : `🔴 Le debes <b>${S(-v)}</b> a ${esc(titulo(persona))}`;\n};\nconst barraMeta = p => { const b = Math.min(10, Math.max(0, Math.round(p / 10))); return '▓'.repeat(b) + '░'.repeat(10 - b); };\n\nlet texto;\nif (r.clase === 'gastos') {\n  const nuevos = (typeof r.nuevos === 'string' ? JSON.parse(r.nuevos) : r.nuevos) || [];\n  const pres = (typeof r.presupuestos === 'string' ? JSON.parse(r.presupuestos) : r.presupuestos) || [];\n  const L = [`✅ <b>Registré ${nuevos.length} gastos</b> · ${S(r.total)}`];\n  for (const g of nuevos) L.push(`${EMOJI[g.categoria] || '📦'} <b>${S(g.monto)}</b>${g.descripcion ? ' — ' + esc(g.descripcion) : ''}`);\n  L.push('', `Hoy llevas: <b>${S(r.total_hoy)}</b>`, `Este mes: <b>${S(r.total_mes)}</b>`);\n  for (const p of pres) L.push(...lineaPresupuesto(p.categoria, p.presupuesto, p.gastado));\n  L.push('', '<i>¿Alguno mal? /ultimos para verlos y /borrar quita el último.</i>');\n  texto = L.join('\\n');\n} else if (r.clase === 'deuda') {\n  const QUE = {\n    le_preste: `Le prestaste ${S(r.monto)} a ${esc(titulo(r.persona))}`,\n    me_prestaron: `Le debes ${S(r.monto)} a ${esc(titulo(r.persona))}`,\n    me_pagaron: `${esc(titulo(r.persona))} te devolvió ${S(r.monto)}`,\n    le_pague: `Le devolviste ${S(r.monto)} a ${esc(titulo(r.persona))}`,\n  };\n  texto = [`🤝 <b>Anotado</b>`, QUE[r.movimiento] || S(r.monto), '', saldoTexto(r.persona, r.saldo), '', '<i>Ver todas: /deudas</i>'].join('\\n');\n} else if (r.clase === 'meta') {\n  texto = [\n    '🎯 <b>Meta creada</b>',\n    `${esc(titulo(r.nombre))}: juntar <b>${S(r.objetivo)}</b>${r.fecha_limite ? ` para el ${fechaLarga(r.fecha_limite)}` : ''}`,\n    '',\n    `Cuando separes plata dime <i>\"ahorré 100 para ${esc(r.nombre)}\"</i> o usa /ahorro 100 ${esc(r.nombre)}.`,\n    '<i>Ver tus metas: /metas</i>',\n  ].join('\\n');\n} else if (r.clase === 'ahorro') {\n  const m = typeof r.meta === 'string' ? JSON.parse(r.meta) : r.meta;\n  if (!m) {\n    const metas = (typeof r.metas === 'string' ? JSON.parse(r.metas) : r.metas) || [];\n    texto = metas.length\n      ? `🤔 ¿Para qué meta son los ${S(r.monto)}? Tienes: ${metas.map(x => esc(x.nombre)).join(', ')}.\\nEj: /ahorro ${r.monto} ${esc(metas[0].nombre)}`\n      : '🎯 Aún no tienes metas de ahorro. Crea una: <i>quiero ahorrar 2000 para una laptop</i> o /meta 2000 laptop';\n  } else {\n    const p = Number(m.objetivo) ? Number(m.ahorrado) / Number(m.objetivo) * 100 : 0;\n    texto = [\n      p >= 100 ? '🎉 <b>¡Meta cumplida!</b>' : '💰 <b>Ahorro anotado</b>',\n      `+${S(r.monto)} para ${esc(titulo(m.nombre))}`,\n      `<code>${barraMeta(p)}</code> ${p.toFixed(0)}%`,\n      `${S(m.ahorrado)} de ${S(m.objetivo)}${p < 100 ? ` · faltan ${S(Number(m.objetivo) - Number(m.ahorrado))}` : ''}`,\n    ].join('\\n');\n  }\n} else if (r.clase === 'recordatorio') {\n  const d = DateTime.fromISO(String(r.cuando_local), { zone: 'America/Lima' }).setLocale('es');\n  texto = [\n    '⏰ <b>Te lo recuerdo</b>',\n    `📝 ${esc(r.texto)}`,\n    `🗓️ ${d.toFormat(\"cccc d 'de' LLLL, HH:mm\")} (${d.toRelative({ locale: 'es' })})`,\n    r.repetir ? `🔁 Se repite ${REP[r.repetir] || r.repetir}` : null,\n    '',\n    `<i>Ver todos: /recordatorios · Cancelar este: /cancelar ${r.id}</i>`,\n  ].filter(l => l !== null).join('\\n');\n} else if (r.clase === 'tarea') {\n  const nuevas = (typeof r.nuevas === 'string' ? JSON.parse(r.nuevas) : r.nuevas) || [];\n  const linea = t => `${PRIO[t.prioridad] || '🟡'} #${t.id} ${esc(t.texto)}${t.vence ? ` · 📅 ${fechaLarga(t.vence)}` : ''}`;\n  texto = [\n    nuevas.length === 1 ? '📝 <b>Tarea anotada</b>' : `📝 <b>Anoté ${nuevas.length} tareas</b>`,\n    ...nuevas.map(linea),\n    '',\n    `Tienes ${r.pendientes} pendiente${Number(r.pendientes) === 1 ? '' : 's'}.`,\n    `<i>Ver todas: /tareas · Marcar hecha: /hecha ${nuevas.map(t => t.id).join(' ')}</i>`,\n  ].join('\\n');\n} else if (r.clase === 'evento') {\n  texto = [\n    '📅 <b>Evento creado en tu Google Calendar</b>',\n    `<b>${esc(r.titulo)}</b>`,\n    `🗓️ ${esc(r.cuando_txt)}`,\n    r.lugar ? `📍 ${esc(r.lugar)}` : null,\n    Number(r.con_aviso) ? (r.todo_el_dia ? '⏰ Te aviso ese día a las 8 am.' : '⏰ Te aviso 30 min antes.') : null,\n    r.link ? `<a href=\"${esc(r.link)}\">Abrir en Calendar</a>` : null,\n  ].filter(l => l !== null).join('\\n');\n} else if (r.clase === 'evento_error') {\n  texto = `⚠️ No pude crear el evento en Google Calendar.\\n<i>${esc(r.detalle)}</i>\\n\\nRevisa que el nodo \"Crear evento\" tenga la credencial de Google Calendar.`;\n} else if (r.clase === 'ingreso') {\n  const bal = Number(r.ingresos_mes) - Number(r.gastos_mes);\n  texto = [\n    '💰 <b>Ingreso registrado</b>',\n    `➕ <b>${S(r.monto)}</b>${r.descripcion ? ' — ' + esc(r.descripcion) : ''}`,\n    `🕒 ${r.fecha_local}${r.metodo === 'voz' ? ' · 🎙️ por voz' : ''}${r.metodo === 'yape' ? ' · 📱 Yape' : ''}`,\n    '',\n    `Ingresos del mes: <b>${S(r.ingresos_mes)}</b>`,\n    `Gastos del mes: <b>${S(r.gastos_mes)}</b>`,\n    `${bal >= 0 ? '🟢' : '🔴'} Balance: <b>${firmado(bal)}</b>`,\n    '',\n    '<i>¿No era un ingreso? /borraringreso lo elimina.</i>',\n  ].join('\\n');\n} else if (!Number(r.insertado)) {\n  texto = `♻️ Ese Yape ya estaba registrado (${S(r.monto)}${r.destinatario ? ' a ' + esc(r.destinatario) : ''}, ${r.fecha_local}). No lo dupliqué.`;\n} else {\n  const lineas = [\n    '✅ <b>Gasto registrado</b>',\n    `💸 <b>${S(r.monto)}</b>${r.descripcion ? ' — ' + esc(r.descripcion) : ''}`,\n    `${EMOJI[r.categoria] || '📦'} ${esc(r.categoria)} · 🕒 ${r.fecha_local}${r.metodo === 'voz' ? ' · 🎙️ por voz' : ''}`,\n  ];\n  if (r.metodo === 'yape' && r.destinatario) lineas.push(`📱 Yape a ${esc(r.destinatario)}`);\n  lineas.push('', `Hoy llevas: <b>${S(r.total_hoy)}</b>`, `Este mes: <b>${S(r.total_mes)}</b>`);\n  lineas.push(...lineaPresupuesto(r.categoria, r.presupuesto, r.gastado_cat_mes));\n  if (!r.descripcion || r.categoria === 'Otros') {\n    lineas.push('', '<i>Tip: /motivo almuerzo o /cat comida corrigen el último gasto.</i>');\n  }\n  texto = lineas.join('\\n');\n}\nreturn [{ json: { chat_id: r.chat_id, texto } }];\n"
+      },
+      "id": "880898cd-85b5-4a37-125a-7bb06297b049",
+      "name": "Confirmar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1856,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Helpers SQL (zona horaria Lima) ---\nconst TZ = \"'America/Lima'\";\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst INI_DIA = `(date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_SEMANA = `(date_trunc('week', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES_ANT = `(${INI_MES} - interval '1 month')`;\nconst FUTURO = `(now() + interval '10 years')`;\n\n// Un reporte = 1 fila con totales, categorías, días y detalle (en JSON)\nfunction reporte(chat, tipo, titulo, desde, hasta, opts = {}) {\n  return `\nWITH g AS (\n  SELECT * FROM gastos WHERE chat_id = ${Number(chat)} AND fecha >= ${desde} AND fecha < ${hasta}\n)\nSELECT ${q(tipo)} AS tipo, ${Number(chat)}::bigint AS chat_id, ${q(titulo)} AS titulo,\n  ${opts.detalle ? 'true' : 'false'} AS mostrar_detalle, ${opts.dias ? 'true' : 'false'} AS mostrar_dias,\n  (SELECT COALESCE(sum(monto), 0) FROM g) AS total,\n  (SELECT count(*) FROM g)::int AS n,\n  COALESCE((SELECT json_agg(c) FROM (\n     SELECT categoria, sum(monto) AS total, count(*)::int AS n FROM g GROUP BY categoria ORDER BY 2 DESC) c), '[]'::json) AS categorias,\n  COALESCE((SELECT json_agg(d) FROM (\n     SELECT to_char(dia, 'YYYY-MM-DD') AS dia, total FROM (\n       SELECT date_trunc('day', fecha AT TIME ZONE ${TZ}) AS dia, sum(monto) AS total FROM g GROUP BY 1) s\n     ORDER BY s.dia) d), '[]'::json) AS por_dia,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, to_char(fecha AT TIME ZONE ${TZ}, 'HH24:MI') AS hora,\n            monto, descripcion, categoria, metodo\n     FROM g ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Ingresos vs gastos del mes (y del mes anterior)\nfunction sqlBalance(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'balance' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS ingresos,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS gastos,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS ingresos_ant,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS gastos_ant,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, monto, descripcion\n     FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES} ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Estado de los presupuestos del mes\nfunction sqlPresupuestos(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'presupuestos' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT p.categoria, p.monto AS presupuesto,\n            COALESCE((SELECT sum(g.monto) FROM gastos g\n                      WHERE g.chat_id = p.chat_id AND g.categoria = p.categoria AND g.fecha >= ${INI_MES}), 0) AS gastado\n     FROM presupuestos p WHERE p.chat_id = ${c} ORDER BY p.categoria) x), '[]'::json) AS filas;`;\n}\n\nconst ctx = $input.first().json;   // viene de un comando o de una pregunta que la IA convirtió en comando\nconst chat = Number(ctx.chat_id);\nconst CATS = ['Comida', 'Transporte', 'Ocio', 'Compras', 'Salud', 'Educación', 'Servicios', 'Hogar', 'Otros'];\nconst norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();\nconst buscarCat = tok => {\n  const t = norm(tok);\n  if (!t) return null;\n  return CATS.find(c => norm(c) === t) || (t.length >= 3 ? CATS.find(c => norm(c).startsWith(t)) : null) || null;\n};\nconst num = s => { const m = String(s).replace(/(\\d),(\\d)/g, '$1.$2').match(/\\d+(?:\\.\\d{1,2})?/); return m ? parseFloat(m[0]) : null; };\nconst limpiar = s => String(s).replace(/s\\/\\.?/gi, ' ')\n  .replace(/(^|\\s)(soles|sol|so|lucas|luca|al mes|mensual|cada mes)(?=\\s|$)/gi, ' ')\n  .replace(/\\s+/g, ' ').trim();\nconst uso = msg => `SELECT 'uso' AS tipo, ${chat}::bigint AS chat_id, ${q(msg)} AS msg;`;\n\nconst partes = ctx.texto.split(/\\s+/);\nconst cmd = partes[0].toLowerCase().replace(/@.*$/, '');\nconst arg = partes.slice(1).join(' ').trim();\nconst ULTIMO = `(SELECT max(id) FROM gastos WHERE chat_id = ${chat})`;\n\nlet sql;\nswitch (cmd) {\n  // ---------- Reportes ----------\n  case '/hoy':\n    sql = reporte(chat, 'hoy', 'Gastos de hoy', INI_DIA, FUTURO, { detalle: true }); break;\n  case '/ayer':\n    sql = reporte(chat, 'ayer', 'Gastos de ayer', `(${INI_DIA} - interval '1 day')`, INI_DIA, { detalle: true }); break;\n  case '/semana':\n    sql = reporte(chat, 'semana', 'Esta semana (desde el lunes)', INI_SEMANA, FUTURO, { dias: true }); break;\n  case '/mes':\n    sql = reporte(chat, 'mes', 'Este mes', INI_MES, FUTURO, { dias: true }); break;\n  case '/mesanterior':\n    sql = reporte(chat, 'mes', 'Mes anterior', INI_MES_ANT, INI_MES, {}); break;\n  case '/ultimos':\n    sql = `SELECT 'ultimos' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x) FROM (\n             SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM HH24:MI') AS cuando, monto, descripcion, categoria, metodo\n             FROM gastos WHERE chat_id = ${chat} ORDER BY fecha DESC, id DESC LIMIT 10) x), '[]'::json) AS filas;`;\n    break;\n  case '/balance':\n    sql = sqlBalance(chat, 'comando'); break;\n\n  // ---------- Corregir el último gasto ----------\n  case '/borrar':\n    sql = `WITH d AS (DELETE FROM gastos WHERE id = ${ULTIMO} RETURNING *)\n           SELECT 'borrar' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(d) FROM d) AS fila;`;\n    break;\n  case '/cat': {\n    const cat = buscarCat(arg);\n    if (!cat) { sql = `SELECT 'cat_invalida' AS tipo, ${chat}::bigint AS chat_id;`; break; }\n    sql = `WITH u AS (UPDATE gastos SET categoria = ${q(cat)} WHERE id = ${ULTIMO} RETURNING *)\n           SELECT 'editado' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(u) FROM u) AS fila;`;\n    break;\n  }\n  case '/motivo':\n    if (!arg) { sql = `SELECT 'motivo_vacio' AS tipo, ${chat}::bigint AS chat_id;`; break; }\n    sql = `WITH u AS (UPDATE gastos SET descripcion = ${q(arg.slice(0, 200).toLowerCase())} WHERE id = ${ULTIMO} RETURNING *)\n           SELECT 'editado' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(u) FROM u) AS fila;`;\n    break;\n\n  // ---------- Ingresos ----------\n  case '/ingreso': {\n    const monto = num(arg);\n    if (!(monto > 0)) { sql = uso('Escribe el monto y el motivo. Ej: /ingreso 1500 sueldo'); break; }\n    const desc = limpiar(arg.replace(/(\\d),(\\d)/g, '$1.$2').replace(/\\d+(?:\\.\\d{1,2})?/, ' ')).toLowerCase().slice(0, 200) || null;\n    sql = `WITH ins AS (INSERT INTO ingresos (monto, descripcion, chat_id) VALUES (${monto}, ${q(desc)}, ${chat}) RETURNING *)\n           SELECT 'ingreso_ok' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(ins) FROM ins) AS fila,\n             (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${chat} AND fecha >= ${INI_MES}) + ${monto} AS ingresos_mes,\n             (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${chat} AND fecha >= ${INI_MES}) AS gastos_mes;`;\n    break;\n  }\n  case '/borraringreso':\n    sql = `WITH d AS (DELETE FROM ingresos WHERE id = (SELECT max(id) FROM ingresos WHERE chat_id = ${chat}) RETURNING *)\n           SELECT 'borrar_ingreso' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(d) FROM d) AS fila;`;\n    break;\n\n  // ---------- Presupuestos ----------\n  case '/presupuestos':\n    sql = sqlPresupuestos(chat, 'comando'); break;\n  case '/presupuesto': {\n    if (!arg) { sql = sqlPresupuestos(chat, 'comando'); break; }\n    const cat = arg.split(/\\s+/).map(buscarCat).find(Boolean);\n    const monto = num(arg);\n    if (!cat || monto === null) {\n      sql = uso('Escribe la categoría y el monto mensual. Ej: /presupuesto comida 400\\nPara quitarlo: /presupuesto comida 0\\nCategorías: ' + CATS.join(', '));\n      break;\n    }\n    if (monto === 0) {\n      sql = `WITH d AS (DELETE FROM presupuestos WHERE chat_id = ${chat} AND categoria = ${q(cat)} RETURNING *)\n             SELECT 'presupuesto_borrado' AS tipo, ${chat}::bigint AS chat_id, ${q(cat)} AS categoria, (SELECT count(*) FROM d)::int AS n;`;\n      break;\n    }\n    sql = `WITH up AS (\n             INSERT INTO presupuestos (chat_id, categoria, monto) VALUES (${chat}, ${q(cat)}, ${monto})\n             ON CONFLICT (chat_id, categoria) DO UPDATE SET monto = EXCLUDED.monto\n             RETURNING *)\n           SELECT 'presupuesto_ok' AS tipo, ${chat}::bigint AS chat_id, (SELECT categoria FROM up) AS categoria, (SELECT monto FROM up) AS monto,\n             (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${chat} AND categoria = ${q(cat)} AND fecha >= ${INI_MES}) AS gastado;`;\n    break;\n  }\n\n  // ---------- Pagos recurrentes ----------\n  case '/recurrente': {\n    let s = arg.replace(/(\\d),(\\d)/g, '$1.$2');\n    let dia = null;\n    const md = s.match(/(?:^|\\s)(?:d[ií]a|el)\\s+(\\d{1,2})(?=\\s|$)/i);\n    if (md) { dia = parseInt(md[1], 10); s = s.replace(md[0], ' '); }\n    let categoria = null;\n    s = s.split(/\\s+/).filter(tok => {\n      if (categoria) return true;\n      const c = CATS.find(c => norm(c) === norm(tok));\n      if (c) { categoria = c; return false; }\n      return true;\n    }).join(' ');\n    const nums = s.match(/\\d+(?:\\.\\d{1,2})?/g) || [];\n    const monto = nums.length ? parseFloat(nums[0]) : null;\n    let resto = s.replace(nums[0] || '', ' ');\n    if (!dia && nums.length >= 2) { dia = parseInt(nums[1], 10); resto = resto.replace(nums[1], ' '); }\n    const nombre = limpiar(resto).slice(0, 80);\n    if (!(monto > 0) || !(dia >= 1 && dia <= 31) || !nombre) {\n      sql = uso('Escribe monto, nombre y día de cobro. Ej:\\n/recurrente 29.90 spotify dia 5\\n/recurrente 600 alquiler dia 1 hogar');\n      break;\n    }\n    if (!categoria) {\n      const GUIAS = [\n        [/gym|gimnasio|seguro|eps|oncosalud/i, 'Salud'],\n        [/alquiler|renta|mantenimiento|condominio/i, 'Hogar'],\n        [/upc|curso|platzi|udemy|pensi[oó]n|universidad|colegio|ingl[eé]s/i, 'Educación'],\n        [/netflix|spotify|disney|hbo|max|prime|crunchyroll|xbox|psn|playstation|steam/i, 'Ocio'],\n      ];\n      categoria = (GUIAS.find(([re]) => re.test(nombre)) || [null, 'Servicios'])[1];\n    }\n    // Si el día de cobro de este mes ya pasó, asumimos que ya lo pagaste: arranca el próximo mes\n    const hoyL = $now.setZone('America/Lima');\n    const ultimo = Math.min(dia, hoyL.endOf('month').day) <= hoyL.day ? hoyL.toFormat('yyyy-MM') : null;\n    sql = `WITH ins AS (\n             INSERT INTO recurrentes (chat_id, nombre, monto, categoria, dia, ultimo_mes)\n             VALUES (${chat}, ${q(nombre)}, ${monto}, ${q(categoria)}, ${dia}, ${q(ultimo)}) RETURNING *)\n           SELECT 'recurrente_ok' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(ins) FROM ins) AS fila;`;\n    break;\n  }\n  case '/recurrentes':\n    sql = `SELECT 'recurrentes' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x) FROM (\n             SELECT id, nombre, monto, categoria, dia, ultimo_mes FROM recurrentes\n             WHERE chat_id = ${chat} AND activo ORDER BY dia, id) x), '[]'::json) AS filas;`;\n    break;\n  case '/quitarrec': {\n    const id = parseInt(arg.replace(/[^0-9]/g, ''), 10);\n    if (!id) { sql = uso('Escribe el número del recurrente. Ej: /quitarrec 3\\nMíralos con /recurrentes'); break; }\n    sql = `WITH u AS (UPDATE recurrentes SET activo = false WHERE id = ${id} AND chat_id = ${chat} AND activo RETURNING *)\n           SELECT 'recurrente_quitado' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(u) FROM u) AS fila;`;\n    break;\n  }\n\n  // ---------- Tareas ----------\n  case '/tarea': {\n    let texto = arg.trim();\n    if (!texto) { sql = uso('Escribe la tarea. Ej: /tarea llamar al banco\\nTambién puedes escribirla normal: \"tengo que llamar al banco el lunes\"'); break; }\n    let prioridad = 2;\n    if (/^!|urgente|importante/i.test(texto)) prioridad = 1;\n    texto = texto.replace(/^!+\\s*/, '').slice(0, 300);\n    sql = `WITH ins AS (INSERT INTO tareas (chat_id, texto, prioridad) VALUES (${chat}, ${q(texto)}, ${prioridad}) RETURNING *)\n           SELECT 'tarea_ok' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(ins) FROM ins) AS fila,\n             (SELECT count(*) FROM tareas WHERE chat_id = ${chat} AND NOT hecha)::int + 1 AS pendientes;`;\n    break;\n  }\n  case '/tareas':\n    sql = `SELECT 'tareas' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x) FROM (\n             SELECT id, texto, prioridad, to_char(vence, 'YYYY-MM-DD') AS vence,\n                    (vence < (now() AT TIME ZONE ${TZ})::date) AS vencida\n             FROM tareas WHERE chat_id = ${chat} AND NOT hecha\n             ORDER BY (vence IS NULL), vence, prioridad, id LIMIT 40) x), '[]'::json) AS filas,\n             (SELECT count(*) FROM tareas WHERE chat_id = ${chat} AND hecha AND hecha_en >= ${INI_SEMANA})::int AS hechas_semana;`;\n    break;\n  case '/hecha':\n  case '/hechas': {\n    const ids = (arg.match(/\\d+/g) || []).map(Number).filter(n => n > 0).slice(0, 20);\n    if (!ids.length) { sql = uso('Escribe el número de la tarea. Ej: /hecha 3  (o varias: /hecha 3 5 8)\\nMíralas con /tareas'); break; }\n    sql = `WITH u AS (UPDATE tareas SET hecha = true, hecha_en = now()\n                      WHERE chat_id = ${chat} AND NOT hecha AND id IN (${ids.join(',')}) RETURNING id, texto)\n           SELECT 'hecha' AS tipo, ${chat}::bigint AS chat_id,\n             COALESCE((SELECT json_agg(u ORDER BY id) FROM u), '[]'::json) AS filas,\n             (SELECT count(*) FROM tareas WHERE chat_id = ${chat} AND NOT hecha)::int - (SELECT count(*) FROM u)::int AS pendientes;`;\n    break;\n  }\n  case '/borrartarea': {\n    const id = parseInt(arg.replace(/[^0-9]/g, ''), 10);\n    if (!id) { sql = uso('Escribe el número de la tarea. Ej: /borrartarea 3'); break; }\n    sql = `WITH d AS (DELETE FROM tareas WHERE id = ${id} AND chat_id = ${chat} RETURNING *)\n           SELECT 'tarea_borrada' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(d) FROM d) AS fila;`;\n    break;\n  }\n\n  // ---------- Recordatorios ----------\n  case '/recordatorios':\n    sql = `SELECT 'recordatorios' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x) FROM (\n             SELECT id, texto, repetir, to_char(cuando AT TIME ZONE ${TZ}, 'YYYY-MM-DD\"T\"HH24:MI') AS cuando\n             FROM recordatorios WHERE chat_id = ${chat} AND activo ORDER BY cuando LIMIT 40) x), '[]'::json) AS filas;`;\n    break;\n  case '/cancelar': {\n    const id = parseInt(arg.replace(/[^0-9]/g, ''), 10);\n    if (!id) { sql = uso('Escribe el número del recordatorio. Ej: /cancelar 3\\nMíralos con /recordatorios'); break; }\n    sql = `WITH u AS (UPDATE recordatorios SET activo = false WHERE id = ${id} AND chat_id = ${chat} AND activo RETURNING *)\n           SELECT 'cancelado' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(u) FROM u) AS fila;`;\n    break;\n  }\n  case '/posponer': {\n    const n = num(arg) || 10;\n    const minutos = Math.min(Math.round(/h/i.test(arg) ? n * 60 : n), 7 * 24 * 60);\n    sql = `WITH ult AS (\n             SELECT * FROM recordatorios WHERE chat_id = ${chat} AND enviado_en IS NOT NULL ORDER BY enviado_en DESC LIMIT 1\n           ), ins AS (\n             INSERT INTO recordatorios (chat_id, texto, cuando)\n             SELECT chat_id, texto, now() + interval '${minutos} minutes' FROM ult RETURNING *\n           )\n           SELECT 'pospuesto' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(ins) FROM ins) AS fila, ${minutos} AS minutos;`;\n    break;\n  }\n\n  // ---------- Gráficos ----------\n  case '/grafico':\n  case '/graficos': {\n    const tipoG = /mes(es)?|meses|6/i.test(arg) && !/^mes$/i.test(arg.trim()) ? 'meses' : (/d[ií]a/i.test(arg) ? 'dias' : 'categorias');\n    if (tipoG === 'meses') {\n      sql = `SELECT 'grafico' AS tipo, 'meses' AS subtipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x ORDER BY x.mes) FROM (\n               SELECT to_char(m, 'YYYY-MM') AS mes,\n                 (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${chat} AND fecha >= (m AT TIME ZONE ${TZ}) AND fecha < ((m + interval '1 month') AT TIME ZONE ${TZ})) AS gastos,\n                 (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${chat} AND fecha >= (m AT TIME ZONE ${TZ}) AND fecha < ((m + interval '1 month') AT TIME ZONE ${TZ})) AS ingresos\n               FROM generate_series(date_trunc('month', now() AT TIME ZONE ${TZ}) - interval '5 months', date_trunc('month', now() AT TIME ZONE ${TZ}), interval '1 month') m) x), '[]'::json) AS datos;`;\n    } else if (tipoG === 'dias') {\n      sql = `SELECT 'grafico' AS tipo, 'dias' AS subtipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x ORDER BY x.dia) FROM (\n               SELECT to_char(d, 'YYYY-MM-DD') AS dia,\n                 (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${chat} AND fecha >= (d AT TIME ZONE ${TZ}) AND fecha < ((d + interval '1 day') AT TIME ZONE ${TZ})) AS total\n               FROM generate_series(date_trunc('month', now() AT TIME ZONE ${TZ}), date_trunc('day', now() AT TIME ZONE ${TZ}), interval '1 day') d) x), '[]'::json) AS datos;`;\n    } else {\n      sql = `SELECT 'grafico' AS tipo, 'categorias' AS subtipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x) FROM (\n               SELECT categoria, sum(monto) AS total FROM gastos WHERE chat_id = ${chat} AND fecha >= ${INI_MES}\n               GROUP BY categoria ORDER BY 2 DESC) x), '[]'::json) AS datos;`;\n    }\n    break;\n  }\n\n  // ---------- Deudas ----------\n  case '/deudas':\n    sql = `SELECT 'deudas' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x ORDER BY x.saldo DESC) FROM (\n             SELECT (array_agg(persona ORDER BY id DESC))[1] AS persona, sum(monto) AS saldo, max(fecha) AS ultima\n             FROM deudas WHERE chat_id = ${chat} GROUP BY lower(persona) HAVING abs(sum(monto)) >= 0.01) x), '[]'::json) AS filas;`;\n    break;\n  case '/saldar': {\n    const persona = arg.trim();\n    if (!persona) { sql = uso('Escribe con quién quedaron a mano. Ej: /saldar juan\\nMira tus deudas con /deudas'); break; }\n    sql = `WITH s AS (SELECT sum(monto) AS saldo, (array_agg(persona ORDER BY id DESC))[1] AS persona FROM deudas\n                      WHERE chat_id = ${chat} AND lower(persona) = lower(${q(persona)})),\n                ins AS (INSERT INTO deudas (chat_id, persona, monto, descripcion)\n                        SELECT ${chat}, persona, -saldo, 'saldado' FROM s WHERE abs(COALESCE(saldo, 0)) >= 0.01 RETURNING *)\n           SELECT 'saldado' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT persona FROM s), ${q(persona)}) AS persona,\n                  (SELECT saldo FROM s) AS saldo_anterior, (SELECT count(*) FROM ins)::int AS n;`;\n    break;\n  }\n  case '/borrardeuda':\n    sql = `WITH d AS (DELETE FROM deudas WHERE id = (SELECT max(id) FROM deudas WHERE chat_id = ${chat}) RETURNING *)\n           SELECT 'deuda_borrada' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(d) FROM d) AS fila;`;\n    break;\n\n  // ---------- Metas de ahorro ----------\n  case '/metas':\n    sql = `SELECT 'metas' AS tipo, ${chat}::bigint AS chat_id, COALESCE((SELECT json_agg(x ORDER BY x.id) FROM (\n             SELECT id, nombre, objetivo, ahorrado, to_char(fecha_limite, 'YYYY-MM-DD') AS fecha_limite FROM metas\n             WHERE chat_id = ${chat} AND activa) x), '[]'::json) AS filas;`;\n    break;\n  case '/meta': {\n    const objetivo = num(arg);\n    const nombre = limpiar(arg.replace(/(\\d),(\\d)/g, '$1.$2').replace(/\\d+(?:\\.\\d{1,2})?/, ' ')).toLowerCase().slice(0, 80);\n    if (!(objetivo > 0) || !nombre) { sql = uso('Escribe el monto y para qué. Ej: /meta 2000 laptop\\nO escríbelo normal: \"quiero ahorrar 2000 para una laptop para diciembre\"'); break; }\n    sql = `WITH ins AS (INSERT INTO metas (chat_id, nombre, objetivo) VALUES (${chat}, ${q(nombre)}, ${objetivo}) RETURNING *)\n           SELECT 'meta_ok' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(ins) FROM ins) AS fila;`;\n    break;\n  }\n  case '/ahorro': {\n    const monto = num(arg);\n    const meta = limpiar(arg.replace(/(\\d),(\\d)/g, '$1.$2').replace(/\\d+(?:\\.\\d{1,2})?/, ' ')).toLowerCase().replace(/^(para|en|a)\\s+(la|el|mi)?\\s*/, '').slice(0, 80) || null;\n    if (!(monto > 0)) { sql = uso('Escribe cuánto y para qué meta. Ej: /ahorro 100 laptop'); break; }\n    sql = `WITH m AS (\n             SELECT id FROM metas WHERE chat_id = ${chat} AND activa\n               AND ((${q(meta)}::text IS NOT NULL AND lower(nombre) LIKE '%' || ${q(meta)} || '%')\n                    OR (${q(meta)}::text IS NULL AND (SELECT count(*) FROM metas WHERE chat_id = ${chat} AND activa) = 1))\n             ORDER BY id LIMIT 1\n           ), u AS (UPDATE metas SET ahorrado = ahorrado + ${monto} WHERE id = (SELECT id FROM m) RETURNING *)\n           SELECT 'ahorro_ok' AS tipo, ${chat}::bigint AS chat_id, ${monto} AS monto, (SELECT row_to_json(u) FROM u) AS meta,\n             COALESCE((SELECT json_agg(x) FROM (SELECT id, nombre FROM metas WHERE chat_id = ${chat} AND activa ORDER BY id) x), '[]'::json) AS metas;`;\n    break;\n  }\n  case '/quitarmeta': {\n    const id = parseInt(arg.replace(/[^0-9]/g, ''), 10);\n    if (!id) { sql = uso('Escribe el número de la meta. Ej: /quitarmeta 2\\nMíralas con /metas'); break; }\n    sql = `WITH u AS (UPDATE metas SET activa = false WHERE id = ${id} AND chat_id = ${chat} AND activa RETURNING *)\n           SELECT 'meta_quitada' AS tipo, ${chat}::bigint AS chat_id, (SELECT row_to_json(u) FROM u) AS fila;`;\n    break;\n  }\n\n  default: // /start, /ayuda, /help y cualquier otro\n    sql = `SELECT 'ayuda' AS tipo, ${chat}::bigint AS chat_id;`;\n}\nreturn [{ json: { sql } }];\n"
+      },
+      "id": "e2e8b42e-d807-0589-6ad6-e755cd4ca250",
+      "name": "SQL comando",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "5d5b4a00-2ee4-4616-4474-41bed75303ea",
+      "name": "Diario 12am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Helpers SQL (zona horaria Lima) ---\nconst TZ = \"'America/Lima'\";\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst INI_DIA = `(date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_SEMANA = `(date_trunc('week', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES_ANT = `(${INI_MES} - interval '1 month')`;\nconst FUTURO = `(now() + interval '10 years')`;\n\n// Un reporte = 1 fila con totales, categorías, días y detalle (en JSON)\nfunction reporte(chat, tipo, titulo, desde, hasta, opts = {}) {\n  return `\nWITH g AS (\n  SELECT * FROM gastos WHERE chat_id = ${Number(chat)} AND fecha >= ${desde} AND fecha < ${hasta}\n)\nSELECT ${q(tipo)} AS tipo, ${Number(chat)}::bigint AS chat_id, ${q(titulo)} AS titulo,\n  ${opts.detalle ? 'true' : 'false'} AS mostrar_detalle, ${opts.dias ? 'true' : 'false'} AS mostrar_dias,\n  (SELECT COALESCE(sum(monto), 0) FROM g) AS total,\n  (SELECT count(*) FROM g)::int AS n,\n  COALESCE((SELECT json_agg(c) FROM (\n     SELECT categoria, sum(monto) AS total, count(*)::int AS n FROM g GROUP BY categoria ORDER BY 2 DESC) c), '[]'::json) AS categorias,\n  COALESCE((SELECT json_agg(d) FROM (\n     SELECT to_char(dia, 'YYYY-MM-DD') AS dia, total FROM (\n       SELECT date_trunc('day', fecha AT TIME ZONE ${TZ}) AS dia, sum(monto) AS total FROM g GROUP BY 1) s\n     ORDER BY s.dia) d), '[]'::json) AS por_dia,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, to_char(fecha AT TIME ZONE ${TZ}, 'HH24:MI') AS hora,\n            monto, descripcion, categoria, metodo\n     FROM g ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Ingresos vs gastos del mes (y del mes anterior)\nfunction sqlBalance(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'balance' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS ingresos,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS gastos,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS ingresos_ant,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS gastos_ant,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, monto, descripcion\n     FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES} ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Estado de los presupuestos del mes\nfunction sqlPresupuestos(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'presupuestos' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT p.categoria, p.monto AS presupuesto,\n            COALESCE((SELECT sum(g.monto) FROM gastos g\n                      WHERE g.chat_id = p.chat_id AND g.categoria = p.categoria AND g.fecha >= ${INI_MES}), 0) AS gastado\n     FROM presupuestos p WHERE p.chat_id = ${c} ORDER BY p.categoria) x), '[]'::json) AS filas;`;\n}\n\n// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nif (CHAT_ID === 'TU_CHAT_ID') return [];\n\n// Corre a las 00:00 → resume el día que acaba de terminar\nconst ayer = $now.setZone('America/Lima').minus({ days: 1 }).toFormat('dd/MM');\nreturn [{ json: { sql: reporte(CHAT_ID, 'diario', `Resumen de ayer (${ayer})`, `(${INI_DIA} - interval '1 day')`, INI_DIA, { detalle: true }) } }];\n"
+      },
+      "id": "0999070b-8fb7-2616-b79a-93ea5c624567",
+      "name": "SQL diario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "8c4cfa43-fc7d-7d37-eae8-574dd9bfef59",
+      "name": "Lunes 7am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Helpers SQL (zona horaria Lima) ---\nconst TZ = \"'America/Lima'\";\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst INI_DIA = `(date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_SEMANA = `(date_trunc('week', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES_ANT = `(${INI_MES} - interval '1 month')`;\nconst FUTURO = `(now() + interval '10 years')`;\n\n// Un reporte = 1 fila con totales, categorías, días y detalle (en JSON)\nfunction reporte(chat, tipo, titulo, desde, hasta, opts = {}) {\n  return `\nWITH g AS (\n  SELECT * FROM gastos WHERE chat_id = ${Number(chat)} AND fecha >= ${desde} AND fecha < ${hasta}\n)\nSELECT ${q(tipo)} AS tipo, ${Number(chat)}::bigint AS chat_id, ${q(titulo)} AS titulo,\n  ${opts.detalle ? 'true' : 'false'} AS mostrar_detalle, ${opts.dias ? 'true' : 'false'} AS mostrar_dias,\n  (SELECT COALESCE(sum(monto), 0) FROM g) AS total,\n  (SELECT count(*) FROM g)::int AS n,\n  COALESCE((SELECT json_agg(c) FROM (\n     SELECT categoria, sum(monto) AS total, count(*)::int AS n FROM g GROUP BY categoria ORDER BY 2 DESC) c), '[]'::json) AS categorias,\n  COALESCE((SELECT json_agg(d) FROM (\n     SELECT to_char(dia, 'YYYY-MM-DD') AS dia, total FROM (\n       SELECT date_trunc('day', fecha AT TIME ZONE ${TZ}) AS dia, sum(monto) AS total FROM g GROUP BY 1) s\n     ORDER BY s.dia) d), '[]'::json) AS por_dia,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, to_char(fecha AT TIME ZONE ${TZ}, 'HH24:MI') AS hora,\n            monto, descripcion, categoria, metodo\n     FROM g ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Ingresos vs gastos del mes (y del mes anterior)\nfunction sqlBalance(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'balance' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS ingresos,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS gastos,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS ingresos_ant,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS gastos_ant,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, monto, descripcion\n     FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES} ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Estado de los presupuestos del mes\nfunction sqlPresupuestos(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'presupuestos' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT p.categoria, p.monto AS presupuesto,\n            COALESCE((SELECT sum(g.monto) FROM gastos g\n                      WHERE g.chat_id = p.chat_id AND g.categoria = p.categoria AND g.fecha >= ${INI_MES}), 0) AS gastado\n     FROM presupuestos p WHERE p.chat_id = ${c} ORDER BY p.categoria) x), '[]'::json) AS filas;`;\n}\n\n// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nif (CHAT_ID === 'TU_CHAT_ID') return [];\n\n// Corre los lunes 7:00 → semana pasada + mes en curso + balance + presupuestos\n// (+ cierre del mes anterior la 1ra semana del mes)\nconst hoy = $now.setZone('America/Lima');\nconst items = [\n  { json: { sql: reporte(CHAT_ID, 'semanal', 'Semana pasada (lun–dom)', `(${INI_SEMANA} - interval '7 days')`, INI_SEMANA, { dias: true }) } },\n  { json: { sql: reporte(CHAT_ID, 'mes', `Mes en curso (${hoy.setLocale('es').toFormat('LLLL')})`, INI_MES, FUTURO, {}) } },\n  { json: { sql: sqlBalance(CHAT_ID, 'reporte') } },\n  { json: { sql: sqlPresupuestos(CHAT_ID, 'reporte') } },\n];\nif (hoy.day <= 7) {\n  const mesPasado = hoy.minus({ months: 1 }).setLocale('es').toFormat('LLLL');\n  items.push({ json: { sql: reporte(CHAT_ID, 'mes', `Cierre de ${mesPasado}`, INI_MES_ANT, INI_MES, {}) } });\n}\nreturn items;\n"
+      },
+      "id": "6f7b227c-97ef-e2da-01c1-7f9d66f7c400",
+      "name": "SQL semanal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "4db8ddcf-14da-0afb-f88e-203b1d49d9f4",
+      "name": "Recurrentes 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nif (CHAT_ID === 'TU_CHAT_ID') return [];\nconst c = Number(CHAT_ID);\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\n\n// Corre todos los días 8:00 → registra los pagos recurrentes que tocan hoy\n// (y los atrasados, si el servidor estuvo apagado) + avisa los de mañana\nconst hoy = $now.setZone('America/Lima');\nconst ym = hoy.toFormat('yyyy-MM');\nconst d = hoy.day, fin = hoy.endOf('month').day;\nconst man = hoy.plus({ days: 1 });\nconst ymMan = man.toFormat('yyyy-MM'), dMan = man.day, finMan = man.endOf('month').day;\n\nconst sql = `\nWITH due AS (\n  SELECT * FROM recurrentes\n  WHERE chat_id = ${c} AND activo AND COALESCE(ultimo_mes, '') <> ${q(ym)} AND LEAST(dia, ${fin}) <= ${d}\n), ins AS (\n  INSERT INTO gastos (fecha, monto, descripcion, categoria, metodo, chat_id, mensaje_original)\n  SELECT now(), monto, lower(nombre), categoria, 'recurrente', chat_id, 'recurrente #' || id FROM due\n  RETURNING id\n), upd AS (\n  UPDATE recurrentes r SET ultimo_mes = ${q(ym)} FROM due WHERE r.id = due.id\n  RETURNING r.id\n)\nSELECT 'recurrentes_dia' AS tipo, ${c}::bigint AS chat_id,\n  COALESCE((SELECT json_agg(json_build_object('nombre', nombre, 'monto', monto, 'categoria', categoria) ORDER BY dia) FROM due), '[]'::json) AS cobrados,\n  COALESCE((SELECT json_agg(json_build_object('nombre', nombre, 'monto', monto) ORDER BY id) FROM recurrentes\n            WHERE chat_id = ${c} AND activo AND LEAST(dia, ${finMan}) = ${dMan} AND COALESCE(ultimo_mes, '') <> ${q(ymMan)}), '[]'::json) AS manana,\n  (SELECT count(*) FROM ins)::int AS n_ins,\n  (SELECT count(*) FROM upd)::int AS n_upd;`;\n\nreturn [{ json: { sql } }];\n"
+      },
+      "id": "8f3b0235-cdb3-bdef-b6c0-a8df8de2bb4d",
+      "name": "SQL recurrentes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "8eacbff2-66e2-6f59-39aa-94de3cbfb331",
+      "name": "Agenda 7am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -384,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.open-meteo.com/v1/forecast?latitude=-12.05&longitude=-77.04&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=America%2FLima&forecast_days=1",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "0bcd96e2-90e1-7674-784f-8b6ba33fdfc8",
+      "name": "Clima Lima",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        1152
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resumen de la mañana: guarda el clima de Lima (Open-Meteo) y marca el origen\nconst c = $input.first().json;\nlet clima = null;\nif (c && c.daily && Array.isArray(c.daily.temperature_2m_max)) {\n  clima = {\n    max: c.daily.temperature_2m_max[0],\n    min: c.daily.temperature_2m_min[0],\n    lluvia: c.daily.precipitation_probability_max ? c.daily.precipitation_probability_max[0] : null,\n    code: c.daily.weather_code ? c.daily.weather_code[0] : null,\n  };\n}\nreturn [{ json: { origen: 'manana', clima } }];\n"
+      },
+      "id": "bc9afbfd-1e78-dac4-7ec2-c3e2c688f917",
+      "name": "Origen mañana",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 20 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "0008975c-0de6-ab73-95eb-d2dfc8328da0",
+      "name": "Domingo 8pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        1328
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { origen: 'semana' } }];"
+      },
+      "id": "6d851e6d-918c-1fda-7b19-ec0569b86205",
+      "name": "Origen semana",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        1328
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define qué rango de fechas mirar según quién pidió la agenda\n//  manana  → resumen de las 7 am (hoy)\n//  semana  → revisión del domingo (la semana que viene)\n//  comando → /agenda (de ahora a 7 días)\nconst j = $input.first().json;\nconst origen = j.origen || 'comando';\nconst hoy = $now.setZone('America/Lima').startOf('day');\nlet desde, hasta;\nif (origen === 'manana') { desde = hoy; hasta = hoy.plus({ days: 1 }); }\nelse if (origen === 'semana') { desde = hoy.plus({ days: 1 }); hasta = desde.plus({ days: 7 }); }\nelse { desde = $now.setZone('America/Lima'); hasta = hoy.plus({ days: 8 }); }\nreturn [{ json: { origen, clima: j.clima || null, desde: desde.toISO(), hasta: hasta.toISO() } }];\n"
+      },
+      "id": "89880801-4533-57ad-af2d-696ee8555966",
+      "name": "Rango agenda",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "timeout": 60000
+        },
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=50&timeMin={{ encodeURIComponent($json.desde) }}&timeMax={{ encodeURIComponent($json.hasta) }}"
+      },
+      "id": "5f3dfc49-fa9b-0a3d-741c-33865c4e67ca",
+      "name": "Calendar eventos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        528,
+        1152
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Helpers SQL (zona horaria Lima) ---\nconst TZ = \"'America/Lima'\";\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst INI_DIA = `(date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_SEMANA = `(date_trunc('week', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES_ANT = `(${INI_MES} - interval '1 month')`;\nconst FUTURO = `(now() + interval '10 years')`;\n\n// Un reporte = 1 fila con totales, categorías, días y detalle (en JSON)\nfunction reporte(chat, tipo, titulo, desde, hasta, opts = {}) {\n  return `\nWITH g AS (\n  SELECT * FROM gastos WHERE chat_id = ${Number(chat)} AND fecha >= ${desde} AND fecha < ${hasta}\n)\nSELECT ${q(tipo)} AS tipo, ${Number(chat)}::bigint AS chat_id, ${q(titulo)} AS titulo,\n  ${opts.detalle ? 'true' : 'false'} AS mostrar_detalle, ${opts.dias ? 'true' : 'false'} AS mostrar_dias,\n  (SELECT COALESCE(sum(monto), 0) FROM g) AS total,\n  (SELECT count(*) FROM g)::int AS n,\n  COALESCE((SELECT json_agg(c) FROM (\n     SELECT categoria, sum(monto) AS total, count(*)::int AS n FROM g GROUP BY categoria ORDER BY 2 DESC) c), '[]'::json) AS categorias,\n  COALESCE((SELECT json_agg(d) FROM (\n     SELECT to_char(dia, 'YYYY-MM-DD') AS dia, total FROM (\n       SELECT date_trunc('day', fecha AT TIME ZONE ${TZ}) AS dia, sum(monto) AS total FROM g GROUP BY 1) s\n     ORDER BY s.dia) d), '[]'::json) AS por_dia,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, to_char(fecha AT TIME ZONE ${TZ}, 'HH24:MI') AS hora,\n            monto, descripcion, categoria, metodo\n     FROM g ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Ingresos vs gastos del mes (y del mes anterior)\nfunction sqlBalance(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'balance' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS ingresos,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS gastos,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS ingresos_ant,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS gastos_ant,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, monto, descripcion\n     FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES} ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Estado de los presupuestos del mes\nfunction sqlPresupuestos(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'presupuestos' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT p.categoria, p.monto AS presupuesto,\n            COALESCE((SELECT sum(g.monto) FROM gastos g\n                      WHERE g.chat_id = p.chat_id AND g.categoria = p.categoria AND g.fecha >= ${INI_MES}), 0) AS gastado\n     FROM presupuestos p WHERE p.chat_id = ${c} ORDER BY p.categoria) x), '[]'::json) AS filas;`;\n}\n\n// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nif (CHAT_ID === 'TU_CHAT_ID') return [];\nconst c = Number(CHAT_ID);\n\nconst rango = $('Rango agenda').first().json;\nconst r = $input.first().json;\n\n// Eventos de Google Calendar (si la credencial falla, la agenda sale igual sin eventos)\nconst calOk = !!(r && Array.isArray(r.items));\nconst eventos = calOk ? r.items.filter(e => e.status !== 'cancelled').slice(0, 40).map(e => {\n  const todo = !!(e.start && e.start.date && !e.start.dateTime);\n  const ini = todo ? DateTime.fromISO(e.start.date, { zone: 'America/Lima' }) : DateTime.fromISO(e.start.dateTime).setZone('America/Lima');\n  const fin = (!todo && e.end && e.end.dateTime) ? DateTime.fromISO(e.end.dateTime).setZone('America/Lima') : null;\n  return {\n    dia: ini.toFormat('yyyy-MM-dd'),\n    hora: todo ? null : ini.toFormat('HH:mm'),\n    hasta: fin ? fin.toFormat('HH:mm') : null,\n    titulo: String(e.summary || '(sin título)').slice(0, 120),\n    lugar: e.location ? String(e.location).slice(0, 80) : null,\n  };\n}) : [];\nconst calError = calOk ? null : String((r && r.error && (r.error.message || r.error.description)) || 'sin conexión').slice(0, 160);\n\nconst desde = `${q(rango.desde)}::timestamptz`, hasta = `${q(rango.hasta)}::timestamptz`;\nconst sql = `\nSELECT 'agenda' AS tipo, ${c}::bigint AS chat_id, ${q(rango.origen)} AS origen,\n  ${q(JSON.stringify(eventos))}::json AS eventos, ${calOk} AS cal_ok, ${q(calError)} AS cal_error,\n  ${q(JSON.stringify(rango.clima || null))}::json AS clima,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT id, texto, repetir, to_char(cuando AT TIME ZONE ${TZ}, 'YYYY-MM-DD') AS dia, to_char(cuando AT TIME ZONE ${TZ}, 'HH24:MI') AS hora\n     FROM recordatorios WHERE chat_id = ${c} AND activo AND cuando >= ${desde} AND cuando < ${hasta}\n       AND texto NOT LIKE '📅%'          -- los avisos de eventos ya salen en el calendario\n     ORDER BY cuando LIMIT 25) x), '[]'::json) AS recordatorios,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT id, texto, prioridad, to_char(vence, 'YYYY-MM-DD') AS vence, (vence < (now() AT TIME ZONE ${TZ})::date) AS vencida\n     FROM tareas WHERE chat_id = ${c} AND NOT hecha\n     ORDER BY (vence IS NULL), vence, prioridad, id LIMIT 12) x), '[]'::json) AS tareas,\n  (SELECT count(*) FROM tareas WHERE chat_id = ${c} AND NOT hecha)::int AS n_pendientes,\n  (SELECT count(*) FROM tareas WHERE chat_id = ${c} AND NOT hecha AND vence < (now() AT TIME ZONE ${TZ})::date)::int AS n_vencidas,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT id, texto FROM tareas WHERE chat_id = ${c} AND hecha AND hecha_en >= now() - interval '7 days' ORDER BY hecha_en LIMIT 15) x), '[]'::json) AS hechas_semana,\n  (SELECT count(*) FROM tareas WHERE chat_id = ${c} AND hecha AND hecha_en >= now() - interval '7 days')::int AS n_hechas_semana,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${c} AND fecha >= (${INI_DIA} - interval '1 day') AND fecha < ${INI_DIA}) AS gasto_ayer,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${c} AND fecha >= ${INI_SEMANA}) AS gasto_semana,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS gasto_mes,\n  (SELECT COALESCE(sum(s), 0) FROM (SELECT sum(monto) AS s FROM deudas WHERE chat_id = ${c} GROUP BY lower(persona)) d WHERE s > 0) AS te_deben,\n  (SELECT COALESCE(-sum(s), 0) FROM (SELECT sum(monto) AS s FROM deudas WHERE chat_id = ${c} GROUP BY lower(persona)) d WHERE s < 0) AS debes,\n  COALESCE((SELECT json_agg(x ORDER BY x.id) FROM (\n     SELECT id, nombre, objetivo, ahorrado, to_char(fecha_limite, 'YYYY-MM-DD') AS fecha_limite FROM metas WHERE chat_id = ${c} AND activa) x), '[]'::json) AS metas;`;\n\nreturn [{ json: { sql } }];\n"
+      },
+      "id": "d559397a-9079-663e-9c31-35b6d3cd2c2b",
+      "name": "SQL agenda",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "29fe101f-7fff-932d-8bbe-6f651222ff87",
+      "name": "Consultar DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        976,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const S = n => 'S/ ' + Number(n || 0).toFixed(2);\nconst firmado = n => (Number(n) < 0 ? '−' : '') + S(Math.abs(Number(n)));\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst J = v => (typeof v === 'string' ? JSON.parse(v) : (v || null));\nconst EMOJI = { 'Comida': '🍔', 'Transporte': '🚕', 'Ocio': '🎮', 'Compras': '🛍️', 'Salud': '💊', 'Educación': '📚', 'Servicios': '💡', 'Hogar': '🏠', 'Otros': '📦' };\nconst DIAS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];\nconst barra = p => { const b = Math.min(10, Math.max(1, Math.round(p / 10))); return '▓'.repeat(b) + '░'.repeat(10 - b); };\nconst cuando = iso => DateTime.fromISO(String(iso)).setZone('America/Lima').toFormat('dd/MM HH:mm');\nconst hoyL = $now.setZone('America/Lima');\nconst nombreMes = hoyL.setLocale('es').toFormat('LLLL');\n\nconst AYUDA = [\n  '🤖 <b>Contador personal</b>',\n  '',\n  '<b>Registrar</b>',\n  '• Escribe: <i>15 almuerzo</i>, <i>taxi 12.50</i>, <i>ayer 30 cine</i>',\n  '• 📱 Mándame la captura del Yape (pago enviado o recibido)',\n  '• 🎙️ Mándame una nota de voz: <i>\"gasté veinte en taxi\"</i>',\n  '• 💰 Ingresos: <i>me pagaron 1500 de sueldo</i> o /ingreso 1500 sueldo',\n  '• 🏦 Los consumos que te llegan al correo del banco se registran solos',\n  '',\n  '<b>Consultas</b>',\n  '/hoy · /ayer · /semana · /mes · /mesanterior',\n  '/ultimos – últimos 10 gastos',\n  '/balance – ingresos vs gastos del mes',\n  '',\n  '<b>Presupuestos</b>',\n  '/presupuesto comida 400 – límite mensual',\n  '/presupuesto comida 0 – lo quita',\n  '/presupuestos – cómo vas este mes',\n  '',\n  '<b>Pagos recurrentes</b>',\n  '/recurrente 29.90 spotify dia 5',\n  '/recurrentes – ver todos',\n  '/quitarrec 3 – quitar el #3',\n  '',\n  '<b>Corregir</b>',\n  '/cat comida · /motivo almuerzo · /borrar – último gasto',\n  '/borraringreso – último ingreso',\n  '',\n  'Categorías: ' + Object.keys(EMOJI).join(', '),\n  '',\n  '📅 <b>Agenda</b> (escribe o manda audio normal)',\n  '• <i>recuérdame pagar la luz el viernes a las 6pm</i>',\n  '• <i>todos los días a las 10pm tomar pastilla</i>',\n  '• <i>tengo que llamar al banco el lunes</i> → tarea',\n  '• <i>reunión con Carlos el martes a las 3pm</i> → Google Calendar',\n  '/agenda – eventos, recordatorios y tareas de la semana',\n  '/tareas · /tarea texto · /hecha 3 · /borrartarea 3',\n  '/recordatorios · /cancelar 3 · /posponer 15',\n  '',\n  '📈 <b>Análisis</b>',\n  '/grafico – gastos del mes por categoría',\n  '/grafico meses · /grafico dias',\n  '/excel – tus movimientos en Excel (/excel mesanterior · /excel todo)',\n  '',\n  '🤝 <b>Deudas</b>: <i>le presté 50 a Juan</i>, <i>le debo 30 a Ana</i>, <i>Juan me pagó 20</i>',\n  '/deudas · /saldar juan · /borrardeuda',\n  '',\n  '🎯 <b>Metas de ahorro</b>: <i>quiero ahorrar 2000 para una laptop para diciembre</i>',\n  '/metas · /meta 2000 laptop · /ahorro 100 laptop · /quitarmeta 2',\n  '',\n  '💬 <b>Pregúntame lo que quieras</b>',\n  '<i>¿cuánto gasté en uber este mes?</i> · <i>¿qué tareas tengo hoy?</i> · <i>¿para qué sirves?</i>',\n  '',\n  '⏰ Agenda 7 am · Recurrentes 8 am · Gastos del día 12 am',\n  '📊 Reporte de gastos lunes 7 am · 🗓️ Revisión semanal domingo 8 pm',\n].join('\\n');\n\n// ---------- Agenda ----------\nconst PRIO = { 1: '🔴', 2: '🟡', 3: '⚪' };\nconst REP = { diario: 'diario', semanal: 'semanal', mensual: 'mensual', laborables: 'lun–vie' };\nconst DIA_L = ['', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];\nconst hoyYMD = hoyL.toFormat('yyyy-MM-dd'), mananaYMD = hoyL.plus({ days: 1 }).toFormat('yyyy-MM-dd');\nconst diaCorto = ymd => {\n  if (ymd === hoyYMD) return 'Hoy';\n  if (ymd === mananaYMD) return 'Mañana';\n  const d = DateTime.fromISO(ymd).setLocale('es');\n  return `${DIA_L[d.weekday]} ${d.day} ${d.toFormat('LLL').replace('.', '')}`;\n};\nconst lineaTarea = t => {\n  const v = t.vence ? (t.vencida ? ` · ⚠️ venció ${diaCorto(t.vence).toLowerCase()}` : ` · 📅 ${diaCorto(t.vence).toLowerCase()}`) : '';\n  return `${PRIO[t.prioridad] || '🟡'} #${t.id} ${esc(t.texto)}${v}`;\n};\nconst lineaEvento = e => `• ${e.hora ? e.hora + (e.hasta ? '–' + e.hasta : '') : 'Todo el día'} ${esc(e.titulo)}${e.lugar ? ' 📍 ' + esc(e.lugar) : ''}`;\nfunction porDia(lista, fmt) {\n  const L = [];\n  let ult = null;\n  for (const x of lista) {\n    if (x.dia !== ult) { L.push(`<u>${diaCorto(x.dia)}</u>`); ult = x.dia; }\n    L.push(fmt(x));\n  }\n  return L;\n}\nfunction climaTexto(c) {\n  if (!c || c.max === undefined || c.max === null) return null;\n  const k = Number(c.code);\n  const [ico, txt] = k === 0 ? ['☀️', 'despejado'] : k <= 2 ? ['🌤️', 'parcialmente nublado'] : k === 3 ? ['☁️', 'nublado']\n    : k <= 48 ? ['🌫️', 'neblina'] : k <= 57 ? ['🌦️', 'llovizna'] : k <= 67 ? ['🌧️', 'lluvia'] : k <= 82 ? ['🌧️', 'chubascos'] : ['⛈️', 'tormenta'];\n  return `${ico} Lima: ${Math.round(c.min)}°–${Math.round(c.max)}°, ${txt}${c.lluvia ? ` · lluvia ${c.lluvia}%` : ''}`;\n}\nfunction agendaTexto(r) {\n  const ev = J(r.eventos) || [], rec = J(r.recordatorios) || [], tar = J(r.tareas) || [];\n  const L = [];\n  const calAviso = r.cal_ok ? null : '<i>⚠️ No pude leer tu Google Calendar (revisa la credencial del nodo \"Calendar eventos\").</i>';\n  const bloqueTareas = (titulo) => {\n    if (!tar.length) return ['✅ Sin tareas pendientes'];\n    const B = [`📝 <b>${titulo}</b> (${r.n_pendientes}${Number(r.n_vencidas) ? `, ${r.n_vencidas} vencida${Number(r.n_vencidas) === 1 ? '' : 's'}` : ''})`];\n    B.push(...tar.map(lineaTarea));\n    if (Number(r.n_pendientes) > tar.length) B.push(`<i>… y ${r.n_pendientes - tar.length} más en /tareas</i>`);\n    return B;\n  };\n\n  if (r.origen === 'manana') {\n    L.push(`☀️ <b>Buenos días</b> — ${hoyL.setLocale('es').toFormat(\"cccc d 'de' LLLL\")}`);\n    const cl = climaTexto(J(r.clima));\n    if (cl) L.push(cl);\n    L.push('', '📅 <b>Hoy</b>');\n    if (ev.length) L.push(...ev.map(lineaEvento)); else if (r.cal_ok) L.push('Nada en el calendario 🙌');\n    if (calAviso) L.push(calAviso);\n    if (rec.length) { L.push('', '⏰ <b>Recordatorios</b>'); L.push(...rec.map(x => `• ${x.hora} ${esc(x.texto)}${x.repetir ? ' 🔁' : ''}`)); }\n    L.push('', ...bloqueTareas('Tareas'));\n    L.push('', `💸 Ayer gastaste <b>${S(r.gasto_ayer)}</b> · En el mes: ${S(r.gasto_mes)}`);\n    return L.join('\\n');\n  }\n\n  if (r.origen === 'semana') {\n    L.push('🗓️ <b>Revisión semanal</b>', '');\n    const hechas = J(r.hechas_semana) || [];\n    if (hechas.length) {\n      L.push(`✅ <b>Completaste ${r.n_hechas_semana} tarea${Number(r.n_hechas_semana) === 1 ? '' : 's'}</b>`);\n      L.push(...hechas.slice(0, 8).map(t => `• ${esc(t.texto)}`));\n      if (Number(r.n_hechas_semana) > 8) L.push(`<i>… y ${r.n_hechas_semana - 8} más</i>`);\n    } else L.push('Esta semana no marcaste tareas como hechas.');\n    L.push('', ...bloqueTareas('Pendientes'));\n    L.push('', '📅 <b>Tu próxima semana</b>');\n    if (ev.length) L.push(...porDia(ev, lineaEvento)); else if (r.cal_ok) L.push('Nada en el calendario todavía.');\n    if (calAviso) L.push(calAviso);\n    if (rec.length) { L.push('', '⏰ <b>Recordatorios de la semana</b>'); L.push(...porDia(rec, x => `• ${x.hora} ${esc(x.texto)}${x.repetir ? ' 🔁' : ''}`)); }\n    L.push('', `💸 Esta semana gastaste <b>${S(r.gasto_semana)}</b> · En el mes: ${S(r.gasto_mes)}`);\n    if (Number(r.te_deben) || Number(r.debes)) L.push(`🤝 Te deben ${S(r.te_deben)} · Debes ${S(r.debes)} (/deudas)`);\n    const mts = J(r.metas) || [];\n    if (mts.length) L.push('', '🎯 <b>Metas</b>', ...metasTexto(mts, true));\n    L.push('', '<i>Tip: marca lo que ya hiciste con /hecha y borra lo que ya no va con /borrartarea.</i>');\n    return L.join('\\n');\n  }\n\n  // /agenda\n  L.push('📅 <b>Tu agenda</b> (próximos 7 días)', '');\n  if (ev.length) L.push(...porDia(ev, lineaEvento)); else if (r.cal_ok) L.push('Nada en el calendario 🙌');\n  if (calAviso) L.push(calAviso);\n  if (rec.length) { L.push('', '⏰ <b>Recordatorios</b>'); L.push(...porDia(rec, x => `• ${x.hora} ${esc(x.texto)}${x.repetir ? ' 🔁' : ''}`)); }\n  L.push('', ...bloqueTareas('Tareas'));\n  return L.join('\\n');\n}\n\nfunction reporteTexto(r) {\n  const total = Number(r.total), n = Number(r.n);\n  const icono = r.tipo === 'diario' ? '🌙' : (r.tipo === 'semanal' ? '📅' : '📊');\n  if (!n) {\n    return `${icono} <b>${esc(r.titulo)}</b>\\nSin gastos registrados${r.tipo === 'diario' ? ' 🎉' : '.'}`;\n  }\n  const L = [`${icono} <b>${esc(r.titulo)}</b>`, `Total: <b>${S(total)}</b> en ${n} gasto${n === 1 ? '' : 's'}`, ''];\n  for (const c of J(r.categorias) || []) {\n    const pct = total ? (Number(c.total) / total) * 100 : 0;\n    L.push(`${EMOJI[c.categoria] || '📦'} ${esc(c.categoria)}: <b>${S(c.total)}</b> (${pct.toFixed(0)}%)`);\n    L.push(`<code>${barra(pct)}</code>`);\n  }\n  if (r.mostrar_dias) {\n    const dias = J(r.por_dia) || [];\n    if (dias.length) {\n      L.push('', '<b>Por día</b>');\n      for (const d of dias) {\n        const dt = DateTime.fromISO(d.dia);\n        L.push(`${DIAS[dt.weekday % 7]} ${dt.toFormat('dd/MM')}: ${S(d.total)}`);\n      }\n      L.push(`<i>Promedio por día con gastos: ${S(total / dias.length)}</i>`);\n    }\n  }\n  if (r.mostrar_detalle) {\n    const det = J(r.detalle) || [];\n    L.push('', '<b>Detalle</b>');\n    const ICON = { yape: ' 📱', voz: ' 🎙️', correo: ' 🏦', recurrente: ' 🔁' };\n    for (const d of det.slice(0, 30)) {\n      L.push(`${d.hora} · ${S(d.monto)} · ${esc(d.descripcion || 'sin motivo')} ${EMOJI[d.categoria] || ''}${ICON[d.metodo] || ''}`);\n    }\n    if (det.length > 30) L.push(`… y ${det.length - 30} más`);\n  }\n  return L.join('\\n');\n}\n\nfunction balanceTexto(r) {\n  const ing = Number(r.ingresos), gas = Number(r.gastos), bal = ing - gas;\n  const L = [\n    `💼 <b>Balance de ${nombreMes}</b>`,\n    `➕ Ingresos: <b>${S(ing)}</b>`,\n    `➖ Gastos: <b>${S(gas)}</b>`,\n    `${bal >= 0 ? '🟢' : '🔴'} Balance: <b>${firmado(bal)}</b>`,\n  ];\n  if (ing > 0) L.push(`<i>Llevas gastado el ${(gas / ing * 100).toFixed(0)}% de lo que ingresó</i>`);\n  const ia = Number(r.ingresos_ant), ga = Number(r.gastos_ant);\n  if (ia || ga) L.push('', `Mes anterior: ${S(ia)} − ${S(ga)} = <b>${firmado(ia - ga)}</b>`);\n  const det = J(r.detalle) || [];\n  if (r.origen !== 'reporte' && det.length) {\n    L.push('', '<b>Ingresos del mes</b>');\n    for (const d of det) L.push(`${d.dia} · ${S(d.monto)} · ${esc(d.descripcion || 'sin motivo')}`);\n  }\n  if (!ing) L.push('', '<i>Registra ingresos con /ingreso 1500 sueldo o escribiendo \"me pagaron 1500\".</i>');\n  return L.join('\\n');\n}\n\nfunction presupuestosTexto(r) {\n  const filas = J(r.filas) || [];\n  if (!filas.length) {\n    if (r.origen === 'reporte') return null;\n    return '🎯 Aún no tienes presupuestos.\\nCrea uno con /presupuesto comida 400';\n  }\n  const fin = hoyL.daysInMonth, dia = hoyL.day, quedanDias = fin - dia + 1;\n  const L = [`🎯 <b>Presupuestos de ${nombreMes}</b>`, ''];\n  let tp = 0, tg = 0;\n  for (const f of filas) {\n    const p = Number(f.presupuesto), g = Number(f.gastado), pct = p ? g / p * 100 : 0;\n    tp += p; tg += g;\n    const flag = pct >= 100 ? '🚨' : (pct >= 80 ? '⚠️' : '✅');\n    L.push(`${flag} ${EMOJI[f.categoria] || '📦'} ${esc(f.categoria)}: <b>${S(g)}</b> de ${S(p)} (${pct.toFixed(0)}%)`);\n    L.push(`<code>${barra(pct)}</code>${pct < 100 ? ` quedan ${S(p - g)}` : ` te pasaste ${S(g - p)}`}`);\n  }\n  const libre = tp - tg;\n  L.push('', `Total: ${S(tg)} de ${S(tp)}`);\n  if (libre > 0) L.push(`Te quedan <b>${S(libre)}</b> para ${quedanDias} día${quedanDias === 1 ? '' : 's'} (≈ ${S(libre / quedanDias)} por día)`);\n  L.push(`<i>Van ${dia} de ${fin} días del mes (${(dia / fin * 100).toFixed(0)}%).</i>`);\n  return L.join('\\n');\n}\n\n\n// ---------- Gráficos (QuickChart → imagen) ----------\n// Cada categoría tiene SIEMPRE el mismo color (paleta validada, orden fijo; \"Otros\" en gris)\nconst COLOR_CAT = { 'Comida': '#2a78d6', 'Transporte': '#eb6834', 'Ocio': '#1baf7a', 'Compras': '#eda100', 'Salud': '#e87ba4',\n  'Educación': '#008300', 'Servicios': '#4a3aa7', 'Hogar': '#e34948', 'Otros': '#8a8986' };\nconst INK = '#52514e', GRID = '#e8e7e3';\nconst MESES = ['', 'ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];\nconst quickchart = cfg => 'https://quickchart.io/chart?version=4&w=720&h=460&bkg=white&f=png&c=' + encodeURIComponent(JSON.stringify(cfg));\nconst ejes = (moneda = true) => ({\n  x: { grid: { display: false }, ticks: { color: INK } },\n  y: { beginAtZero: true, grid: { color: GRID }, border: { display: false }, ticks: { color: INK, ...(moneda ? {} : {}) } },\n});\nfunction grafico(r) {\n  const d = J(r.datos) || [];\n  if (r.subtipo === 'meses') {\n    if (!d.some(x => Number(x.gastos) || Number(x.ingresos))) return { texto: '📊 Todavía no hay datos de los últimos meses para graficar.' };\n    const labels = d.map(x => MESES[Number(x.mes.slice(5, 7))] + ' ' + x.mes.slice(2, 4));\n    const cfg = { type: 'bar', data: { labels, datasets: [\n      { label: 'Ingresos', data: d.map(x => Number(x.ingresos)), backgroundColor: '#2a78d6', borderRadius: 4, borderSkipped: 'start', maxBarThickness: 28 },\n      { label: 'Gastos', data: d.map(x => Number(x.gastos)), backgroundColor: '#eb6834', borderRadius: 4, borderSkipped: 'start', maxBarThickness: 28 },\n    ] }, options: { plugins: { title: { display: true, text: 'Ingresos vs gastos (S/) — últimos 6 meses', color: '#0b0b0b', font: { size: 16 } },\n      legend: { position: 'top', labels: { color: INK } } }, scales: ejes() } };\n    const ult = d[d.length - 1];\n    return { foto: quickchart(cfg), texto: `📊 <b>Ingresos vs gastos</b>\\nEste mes: ingresaste ${S(ult.ingresos)} y gastaste ${S(ult.gastos)}.` };\n  }\n  if (r.subtipo === 'dias') {\n    const total = d.reduce((a, x) => a + Number(x.total), 0);\n    if (!total) return { texto: '📊 Este mes todavía no tienes gastos para graficar.' };\n    const cfg = { type: 'bar', data: { labels: d.map(x => String(Number(x.dia.slice(8, 10)))), datasets: [\n      { label: 'Gasto del día', data: d.map(x => Number(x.total)), backgroundColor: '#2a78d6', borderRadius: 4, borderSkipped: 'start', maxBarThickness: 22 },\n    ] }, options: { plugins: { title: { display: true, text: `Gasto por día (S/) — ${nombreMes}`, color: '#0b0b0b', font: { size: 16 } }, legend: { display: false } }, scales: ejes() } };\n    const top = d.reduce((a, x) => Number(x.total) > Number(a.total) ? x : a, d[0]);\n    return { foto: quickchart(cfg), texto: `📊 <b>Gasto por día</b> (${nombreMes})\\nTotal: ${S(total)} · Día más caro: ${Number(top.dia.slice(8, 10))} (${S(top.total)})` };\n  }\n  const total = d.reduce((a, x) => a + Number(x.total), 0);\n  if (!total) return { texto: '📊 Este mes todavía no tienes gastos para graficar.' };\n  const cfg = { type: 'doughnut', data: {\n    labels: d.map(x => `${x.categoria}  S/ ${Number(x.total).toFixed(0)} (${(Number(x.total) / total * 100).toFixed(0)}%)`),\n    datasets: [{ data: d.map(x => Number(x.total)), backgroundColor: d.map(x => COLOR_CAT[x.categoria] || '#8a8986'), borderColor: '#ffffff', borderWidth: 2 }],\n  }, options: { cutout: '58%', plugins: {\n    title: { display: true, text: `Gastos de ${nombreMes}: S/ ${total.toFixed(2)}`, color: '#0b0b0b', font: { size: 16 } },\n    legend: { position: 'right', labels: { color: INK, boxWidth: 14, padding: 12 } },\n    datalabels: { display: false } } } };\n  return { foto: quickchart(cfg), texto: `📊 <b>Gastos de ${nombreMes}</b>: ${S(total)}\\nLo que más pesa: ${esc(d[0].categoria)} (${(Number(d[0].total) / total * 100).toFixed(0)}%).\\n<i>Más gráficos: /grafico meses · /grafico dias</i>` };\n}\n\n// ---------- Deudas y metas ----------\nconst titulo = s => String(s || '').replace(/(^|\\s)\\S/g, c => c.toUpperCase());\nfunction metasTexto(filas, compacto = false) {\n  const L = [];\n  for (const m of filas) {\n    const obj = Number(m.objetivo), aho = Number(m.ahorrado), pct = obj ? aho / obj * 100 : 0;\n    L.push(`${pct >= 100 ? '🎉' : '🎯'} ${compacto ? '' : `#${m.id} `}<b>${esc(titulo(m.nombre))}</b>: ${S(aho)} de ${S(obj)}`);\n    let extra = '';\n    if (pct < 100 && m.fecha_limite) {\n      const lim = DateTime.fromISO(m.fecha_limite, { zone: 'America/Lima' });\n      const meses = Math.max(1, Math.ceil(lim.diff(hoyL, 'months').months));\n      extra = ` · ${S((obj - aho) / meses)}/mes hasta ${MESES[lim.month]} ${lim.year}`;\n    }\n    L.push(`<code>${barra(pct)}</code> ${pct.toFixed(0)}%${extra}`);\n  }\n  return L;\n}\n\nfunction texto(r) {\n  switch (r.tipo) {\n    case 'ayuda': return AYUDA;\n    case 'uso': return 'ℹ️ ' + esc(r.msg);\n    case 'ultimos': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return 'Todavía no registraste gastos.';\n      return ['🧾 <b>Últimos gastos</b>', ...filas.map(f =>\n        `${f.cuando} · <b>${S(f.monto)}</b> · ${esc(f.descripcion || 'sin motivo')} ${EMOJI[f.categoria] || ''}`)].join('\\n');\n    }\n    case 'borrar': {\n      const f = J(r.fila);\n      if (!f) return 'No hay gastos para borrar.';\n      return `🗑️ Borré: <b>${S(f.monto)}</b> · ${esc(f.descripcion || 'sin motivo')} (${esc(f.categoria)}, ${cuando(f.fecha)})`;\n    }\n    case 'editado': {\n      const f = J(r.fila);\n      if (!f) return 'No hay gastos para editar.';\n      return `✏️ Actualizado: <b>${S(f.monto)}</b> · ${esc(f.descripcion || 'sin motivo')} → ${EMOJI[f.categoria] || ''} ${esc(f.categoria)}`;\n    }\n    case 'cat_invalida': return 'Categoría no válida. Usa una de: ' + Object.keys(EMOJI).join(', ') + '\\nEj: /cat transporte';\n    case 'motivo_vacio': return 'Escribe el motivo después del comando. Ej: /motivo almuerzo con amigos';\n\n    case 'ingreso_ok': {\n      const f = J(r.fila) || {};\n      const bal = Number(r.ingresos_mes) - Number(r.gastos_mes);\n      return [\n        '💰 <b>Ingreso registrado</b>',\n        `➕ <b>${S(f.monto)}</b>${f.descripcion ? ' — ' + esc(f.descripcion) : ''}`,\n        '',\n        `Ingresos del mes: <b>${S(r.ingresos_mes)}</b>`,\n        `Gastos del mes: <b>${S(r.gastos_mes)}</b>`,\n        `${bal >= 0 ? '🟢' : '🔴'} Balance: <b>${firmado(bal)}</b>`,\n      ].join('\\n');\n    }\n    case 'borrar_ingreso': {\n      const f = J(r.fila);\n      if (!f) return 'No hay ingresos para borrar.';\n      return `🗑️ Borré el ingreso: <b>${S(f.monto)}</b> · ${esc(f.descripcion || 'sin motivo')} (${cuando(f.fecha)})`;\n    }\n    case 'balance': return balanceTexto(r);\n\n    case 'presupuestos': return presupuestosTexto(r);\n    case 'presupuesto_ok': {\n      const p = Number(r.monto), g = Number(r.gastado), pct = p ? g / p * 100 : 0;\n      return `🎯 Presupuesto de ${EMOJI[r.categoria] || ''} ${esc(r.categoria)}: <b>${S(p)}</b> al mes.\\nEste mes llevas ${S(g)} (${pct.toFixed(0)}%).\\nTe aviso cuando llegues al 80% y si te pasas.`;\n    }\n    case 'presupuesto_borrado':\n      return Number(r.n) ? `🗑️ Quité el presupuesto de ${esc(r.categoria)}.` : `No tenías presupuesto de ${esc(r.categoria)}.`;\n\n    case 'recurrente_ok': {\n      const f = J(r.fila) || {};\n      return [\n        '🔁 <b>Pago recurrente guardado</b>',\n        `#${f.id} · ${esc(f.nombre)}: <b>${S(f.monto)}</b> el día ${f.dia} de cada mes (${EMOJI[f.categoria] || ''} ${esc(f.categoria)})`,\n        f.ultimo_mes\n          ? 'Como el día de cobro de este mes ya pasó, lo di por pagado: lo registro solo desde el próximo mes.'\n          : 'Lo registro solo ese día a las 8 am.',\n        'Te aviso un día antes. /recurrentes para ver todos.',\n      ].join('\\n');\n    }\n    case 'recurrentes': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return '🔁 No tienes pagos recurrentes.\\nEj: /recurrente 29.90 spotify dia 5';\n      const total = filas.reduce((a, f) => a + Number(f.monto), 0);\n      return ['🔁 <b>Pagos recurrentes</b>', ...filas.map(f =>\n        `#${f.id} · día ${f.dia} · ${esc(f.nombre)} · <b>${S(f.monto)}</b> ${EMOJI[f.categoria] || ''}`),\n        '', `Total al mes: <b>${S(total)}</b>`, '<i>Para quitar uno: /quitarrec número</i>'].join('\\n');\n    }\n    case 'recurrente_quitado': {\n      const f = J(r.fila);\n      if (!f) return 'No encontré ese recurrente. Míralos con /recurrentes';\n      return `🗑️ Quité el recurrente #${f.id}: ${esc(f.nombre)} (${S(f.monto)}). Ya no lo registraré.`;\n    }\n    case 'recurrentes_dia': {\n      const cob = J(r.cobrados) || [], man = J(r.manana) || [];\n      if (!cob.length && !man.length) return null;\n      const L = [];\n      if (cob.length) {\n        L.push('🔁 <b>Registré tus pagos recurrentes</b>');\n        for (const f of cob) L.push(`• ${esc(f.nombre)}: <b>${S(f.monto)}</b> ${EMOJI[f.categoria] || ''}`);\n        L.push('<i>Si alguno no se cobró, bórralo con /borrar.</i>');\n      }\n      if (man.length) {\n        if (L.length) L.push('');\n        L.push('⏰ <b>Mañana se cobra</b>');\n        for (const f of man) L.push(`• ${esc(f.nombre)}: <b>${S(f.monto)}</b>`);\n      }\n      return L.join('\\n');\n    }\n    // ---------- Agenda ----------\n    case 'agenda': return agendaTexto(r);\n    case 'tarea_ok': {\n      const f = J(r.fila) || {};\n      return `📝 <b>Tarea anotada</b> #${f.id}\\n${PRIO[f.prioridad] || '🟡'} ${esc(f.texto)}\\n\\nTienes ${r.pendientes} pendiente${Number(r.pendientes) === 1 ? '' : 's'}. /tareas para verlas.`;\n    }\n    case 'tareas': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return `✅ No tienes tareas pendientes.${Number(r.hechas_semana) ? `\\nEsta semana completaste ${r.hechas_semana} 💪` : ''}\\nAnota una: <i>tengo que llamar al banco</i> o /tarea llamar al banco`;\n      return ['📝 <b>Tareas pendientes</b>', ...filas.map(lineaTarea), '',\n        Number(r.hechas_semana) ? `Esta semana completaste ${r.hechas_semana} 💪` : null,\n        '<i>Marcar hecha: /hecha número · Borrar: /borrartarea número</i>'].filter(l => l !== null).join('\\n');\n    }\n    case 'hecha': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return 'No encontré esa tarea pendiente. Míralas con /tareas';\n      return [`✅ <b>¡Hecho${filas.length > 1 ? 's' : ''}!</b>`, ...filas.map(t => `• <s>${esc(t.texto)}</s>`), '',\n        Number(r.pendientes) ? `Te quedan ${r.pendientes} pendiente${Number(r.pendientes) === 1 ? '' : 's'}.` : '🎉 ¡No te queda ninguna pendiente!'].join('\\n');\n    }\n    case 'tarea_borrada': {\n      const f = J(r.fila);\n      return f ? `🗑️ Borré la tarea #${f.id}: ${esc(f.texto)}` : 'No encontré esa tarea. Míralas con /tareas';\n    }\n    case 'recordatorios': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return '⏰ No tienes recordatorios activos.\\nCrea uno: <i>recuérdame llamar a mamá mañana a las 6pm</i>';\n      return ['⏰ <b>Recordatorios activos</b>', ...filas.map(f => {\n        const d = DateTime.fromISO(f.cuando, { zone: 'America/Lima' });\n        return `#${f.id} · ${diaCorto(d.toFormat('yyyy-MM-dd'))} ${d.toFormat('HH:mm')} · ${esc(f.texto)}${f.repetir ? ` 🔁 ${REP[f.repetir] || f.repetir}` : ''}`;\n      }), '', '<i>Para cancelar uno: /cancelar número</i>'].join('\\n');\n    }\n    case 'cancelado': {\n      const f = J(r.fila);\n      return f ? `🔕 Cancelé el recordatorio #${f.id}: ${esc(f.texto)}` : 'No encontré ese recordatorio activo. Míralos con /recordatorios';\n    }\n    case 'pospuesto': {\n      const f = J(r.fila);\n      if (!f) return 'Todavía no te he mandado ningún recordatorio para posponer.';\n      const m = Number(r.minutos);\n      return `😴 Listo, te recuerdo \"${esc(f.texto)}\" en ${m >= 60 && m % 60 === 0 ? (m / 60) + ' h' : m + ' min'}.`;\n    }\n    // ---------- Análisis ----------\n    case 'grafico': return grafico(r);\n\n    // ---------- Deudas ----------\n    case 'deudas': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return '🤝 No tienes deudas pendientes. Todo a mano ✅\\nAnota una: <i>le presté 50 a Juan</i> o <i>le debo 30 a Ana</i>';\n      const meDeben = filas.filter(f => Number(f.saldo) > 0), debo = filas.filter(f => Number(f.saldo) < 0);\n      const L = ['🤝 <b>Deudas</b>'];\n      if (meDeben.length) {\n        L.push('', `💚 <b>Te deben</b> (${S(meDeben.reduce((a, f) => a + Number(f.saldo), 0))})`);\n        L.push(...meDeben.map(f => `• ${esc(titulo(f.persona))}: ${S(f.saldo)}`));\n      }\n      if (debo.length) {\n        L.push('', `🔴 <b>Debes</b> (${S(-debo.reduce((a, f) => a + Number(f.saldo), 0))})`);\n        L.push(...debo.map(f => `• ${esc(titulo(f.persona))}: ${S(-Number(f.saldo))}`));\n      }\n      L.push('', '<i>Quedaron a mano: /saldar nombre</i>');\n      return L.join('\\n');\n    }\n    case 'saldado':\n      return Number(r.n)\n        ? `✅ Listo, con ${esc(titulo(r.persona))} ya están a mano (${Number(r.saldo_anterior) > 0 ? 'te debía' : 'le debías'} ${S(Math.abs(Number(r.saldo_anterior)))}).`\n        : `No tenías nada pendiente con ${esc(titulo(r.persona))}.`;\n    case 'deuda_borrada': {\n      const f = J(r.fila);\n      return f ? `🗑️ Borré el último movimiento de deudas: ${esc(titulo(f.persona))} ${S(Math.abs(Number(f.monto)))}` : 'No hay movimientos de deudas para borrar.';\n    }\n\n    // ---------- Metas ----------\n    case 'metas': {\n      const filas = J(r.filas) || [];\n      if (!filas.length) return '🎯 No tienes metas de ahorro.\\nCrea una: <i>quiero ahorrar 2000 para una laptop para diciembre</i> o /meta 2000 laptop';\n      return ['🎯 <b>Tus metas de ahorro</b>', '', ...metasTexto(filas), '', '<i>Sumar: /ahorro 100 nombre · Quitar: /quitarmeta número</i>'].join('\\n');\n    }\n    case 'meta_ok': {\n      const f = J(r.fila) || {};\n      return `🎯 <b>Meta creada</b> #${f.id}\\n${esc(titulo(f.nombre))}: juntar <b>${S(f.objetivo)}</b>\\n\\nCuando separes plata: /ahorro 100 ${esc(f.nombre)}`;\n    }\n    case 'ahorro_ok': {\n      const m = J(r.meta);\n      if (!m) {\n        const metas = J(r.metas) || [];\n        return metas.length\n          ? `🤔 ¿Para qué meta son los ${S(r.monto)}? Tienes: ${metas.map(x => esc(x.nombre)).join(', ')}.\\nEj: /ahorro ${r.monto} ${esc(metas[0].nombre)}`\n          : '🎯 Aún no tienes metas. Crea una con /meta 2000 laptop';\n      }\n      const pct = Number(m.objetivo) ? Number(m.ahorrado) / Number(m.objetivo) * 100 : 0;\n      return `${pct >= 100 ? '🎉 <b>¡Meta cumplida!</b>' : '💰 <b>Ahorro anotado</b>'}\\n+${S(r.monto)} para ${esc(titulo(m.nombre))}\\n<code>${barra(pct)}</code> ${pct.toFixed(0)}% · ${S(m.ahorrado)} de ${S(m.objetivo)}`;\n    }\n    case 'meta_quitada': {\n      const f = J(r.fila);\n      return f ? `🗑️ Quité la meta #${f.id}: ${esc(titulo(f.nombre))}` : 'No encontré esa meta. Míralas con /metas';\n    }\n    default: return reporteTexto(r);\n  }\n}\n\n// Junta los textos del mismo chat en un solo mensaje; los gráficos van como foto aparte\nconst porChat = {}, fotos = [];\nfor (const it of $input.all()) {\n  const r = it.json;\n  if (r.chat_id === undefined || r.chat_id === null) continue;\n  const t = texto(r);\n  if (!t) continue;\n  if (typeof t === 'object') {\n    if (t.foto) { fotos.push({ json: { ruta: 1, chat_id: r.chat_id, foto_url: t.foto, texto: t.texto } }); continue; }\n    (porChat[r.chat_id] = porChat[r.chat_id] || []).push(t.texto);\n    continue;\n  }\n  (porChat[r.chat_id] = porChat[r.chat_id] || []).push(t);\n}\nreturn [\n  ...Object.entries(porChat).map(([chat_id, textos]) => ({ json: { ruta: 0, chat_id, texto: textos.join('\\n\\n━━━━━━━━━━\\n\\n') } })),\n  ...fotos,\n];\n"
+      },
+      "id": "1e3f0aac-0e49-f9f4-2885-94d172d7a192",
+      "name": "Formatear reporte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.ruta }}"
+      },
+      "id": "d7bd5621-abc1-4fef-d274-207f47064c22",
+      "name": "¿Foto?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1440,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $json.chat_id }}",
+        "file": "={{ $json.foto_url }}",
+        "additionalFields": {
+          "caption": "={{ $json.texto }}",
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "d028fd5a-7f26-9949-4d42-390c78065df2",
+      "name": "Enviar foto",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1664,
+        576
+      ],
+      "webhookId": "ac5805b2-2774-f5ce-184c-434798735565"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "7580238f-5fae-3a6f-a988-b2fa1f5c4a09",
+      "name": "Responder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        368
+      ],
+      "webhookId": "bd7d5654-f9d5-4edf-3b8c-3093f408d435"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Helpers SQL (zona horaria Lima) ---\nconst TZ = \"'America/Lima'\";\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst INI_DIA = `(date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_SEMANA = `(date_trunc('week', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\nconst INI_MES_ANT = `(${INI_MES} - interval '1 month')`;\nconst FUTURO = `(now() + interval '10 years')`;\n\n// Un reporte = 1 fila con totales, categorías, días y detalle (en JSON)\nfunction reporte(chat, tipo, titulo, desde, hasta, opts = {}) {\n  return `\nWITH g AS (\n  SELECT * FROM gastos WHERE chat_id = ${Number(chat)} AND fecha >= ${desde} AND fecha < ${hasta}\n)\nSELECT ${q(tipo)} AS tipo, ${Number(chat)}::bigint AS chat_id, ${q(titulo)} AS titulo,\n  ${opts.detalle ? 'true' : 'false'} AS mostrar_detalle, ${opts.dias ? 'true' : 'false'} AS mostrar_dias,\n  (SELECT COALESCE(sum(monto), 0) FROM g) AS total,\n  (SELECT count(*) FROM g)::int AS n,\n  COALESCE((SELECT json_agg(c) FROM (\n     SELECT categoria, sum(monto) AS total, count(*)::int AS n FROM g GROUP BY categoria ORDER BY 2 DESC) c), '[]'::json) AS categorias,\n  COALESCE((SELECT json_agg(d) FROM (\n     SELECT to_char(dia, 'YYYY-MM-DD') AS dia, total FROM (\n       SELECT date_trunc('day', fecha AT TIME ZONE ${TZ}) AS dia, sum(monto) AS total FROM g GROUP BY 1) s\n     ORDER BY s.dia) d), '[]'::json) AS por_dia,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, to_char(fecha AT TIME ZONE ${TZ}, 'HH24:MI') AS hora,\n            monto, descripcion, categoria, metodo\n     FROM g ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Ingresos vs gastos del mes (y del mes anterior)\nfunction sqlBalance(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'balance' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS ingresos,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES}) AS gastos,\n  (SELECT COALESCE(sum(monto), 0) FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS ingresos_ant,\n  (SELECT COALESCE(sum(monto), 0) FROM gastos   WHERE chat_id = ${c} AND fecha >= ${INI_MES_ANT} AND fecha < ${INI_MES}) AS gastos_ant,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT to_char(fecha AT TIME ZONE ${TZ}, 'DD/MM') AS dia, monto, descripcion\n     FROM ingresos WHERE chat_id = ${c} AND fecha >= ${INI_MES} ORDER BY fecha) x), '[]'::json) AS detalle;`;\n}\n\n// Estado de los presupuestos del mes\nfunction sqlPresupuestos(chat, origen) {\n  const c = Number(chat);\n  return `\nSELECT 'presupuestos' AS tipo, ${c}::bigint AS chat_id, ${q(origen)} AS origen,\n  COALESCE((SELECT json_agg(x) FROM (\n     SELECT p.categoria, p.monto AS presupuesto,\n            COALESCE((SELECT sum(g.monto) FROM gastos g\n                      WHERE g.chat_id = p.chat_id AND g.categoria = p.categoria AND g.fecha >= ${INI_MES}), 0) AS gastado\n     FROM presupuestos p WHERE p.chat_id = ${c} ORDER BY p.categoria) x), '[]'::json) AS filas;`;\n}\n\n// /excel [mesanterior | todo | 2026-08] → movimientos (gastos + ingresos) para el archivo\nconst j = $input.first().json;\nconst chat = Number(j.chat_id);\nconst arg = String(j.texto || '').split(/\\s+/).slice(1).join(' ').trim().toLowerCase();\nconst hoy = $now.setZone('America/Lima');\n\nlet desde = INI_MES, hasta = FUTURO, etiqueta = hoy.toFormat('yyyy-MM'), nombre = hoy.setLocale('es').toFormat('LLLL yyyy');\nif (/anterior|pasado/.test(arg)) {\n  desde = INI_MES_ANT; hasta = INI_MES;\n  const m = hoy.minus({ months: 1 });\n  etiqueta = m.toFormat('yyyy-MM'); nombre = m.setLocale('es').toFormat('LLLL yyyy');\n} else if (/todo|todos|completo/.test(arg)) {\n  desde = `'2000-01-01'::timestamptz`; etiqueta = 'todo'; nombre = 'todo el historial';\n} else if (/^\\d{4}-\\d{2}$/.test(arg)) {\n  const m = DateTime.fromISO(arg + '-01', { zone: 'America/Lima' });\n  desde = `${q(m.toISO())}::timestamptz`; hasta = `${q(m.plus({ months: 1 }).toISO())}::timestamptz`;\n  etiqueta = arg; nombre = m.setLocale('es').toFormat('LLLL yyyy');\n}\n\nconst sql = `\nSELECT * FROM (\n  SELECT to_char(fecha AT TIME ZONE ${TZ}, 'YYYY-MM-DD HH24:MI') AS \"Fecha\", 'Gasto' AS \"Tipo\", -monto::float AS \"Monto\",\n         categoria AS \"Categoría\", COALESCE(descripcion, '') AS \"Descripción\", metodo AS \"Método\"\n  FROM gastos WHERE chat_id = ${chat} AND fecha >= ${desde} AND fecha < ${hasta}\n  UNION ALL\n  SELECT to_char(fecha AT TIME ZONE ${TZ}, 'YYYY-MM-DD HH24:MI'), 'Ingreso', monto::float, '', COALESCE(descripcion, ''), ''\n  FROM ingresos WHERE chat_id = ${chat} AND fecha >= ${desde} AND fecha < ${hasta}\n) m ORDER BY \"Fecha\";`;\n\nreturn [{ json: {\n  sql,\n  chat_id: chat,\n  archivo: `movimientos_${etiqueta}.xlsx`,\n  caption: `📄 Tus movimientos de ${nombre}. Los gastos van en negativo y los ingresos en positivo.\\n<i>Otros periodos: /excel mesanterior · /excel todo · /excel 2026-08</i>`,\n} }];\n"
+      },
+      "id": "445c1976-f816-9380-8985-63dbc4de7509",
+      "name": "SQL excel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        1500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "09147f5a-335b-139a-ee56-66e890b894e6",
+      "name": "Datos excel",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        528,
+        1500
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "fileName": "={{ $('SQL excel').first().json.archivo }}",
+          "sheetName": "Movimientos"
+        }
+      },
+      "id": "5901c10f-9126-00c8-6110-eee83cc3173b",
+      "name": "Convertir a Excel",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        752,
+        1500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $('SQL excel').first().json.chat_id }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "={{ $('SQL excel').first().json.caption }}",
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "32ef7e55-243f-7347-d57b-0b10f8cba4cd",
+      "name": "Enviar Excel",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        976,
+        1500
+      ],
+      "webhookId": "b80f939d-10e4-6250-504c-ca599bde76f9"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "4a49d4ca-95d9-bc91-749e-21a4b54aff4a",
+      "name": "Consultar pregunta",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1408,
+        720
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// La IA ya consultó tus datos: ahora redacta la respuesta como una persona\nconst p = $('Interpretar respuesta').first().json;\nconst r = $input.first().json;\nconst hoy = $now.setZone('America/Lima').setLocale('es').toFormat(\"cccc d 'de' LLLL yyyy, HH:mm\");\n\nlet datos, error = null;\nif (r && r.error) error = String(r.error.message || r.error.description || r.error).slice(0, 200);\nelse {\n  datos = r ? r.filas : [];\n  if (typeof datos === 'string') { try { datos = JSON.parse(datos); } catch (e) {} }\n}\n\nconst prompt = `Eres el asistente personal del usuario en Telegram (finanzas y agenda, Perú, moneda soles). Hoy es ${hoy}.\nEl usuario te preguntó: \"\"\"${p.pregunta}\"\"\"\n${error\n  ? `Intentaste consultar su base de datos pero falló (${error}). Dile en una línea que no pudiste sacar ese dato y sugiérele preguntarlo de otra forma o usar /ayuda.`\n  : `Esto salió de su base de datos (JSON): ${JSON.stringify(datos).slice(0, 6000)}`}\nResponde en español peruano, cálido y directo, tuteando, como una persona (no como un robot). Máximo 6 líneas.\n- Montos con formato \"S/ 12.50\". Fechas legibles (ej: \"el martes 29\"). No menciones SQL, tablas ni JSON.\n- Si los datos están vacíos, dilo con naturalidad (ej: \"No tienes tareas para hoy 🙌\").\n- Si ayuda a leer, usa viñetas \"•\". Puedes usar **negritas** para lo importante y 1 emoji como mucho.`;\n\nreturn [{ json: { body: {\n  contents: [{ role: 'user', parts: [{ text: prompt }] }],\n  generationConfig: { temperature: 0.4 },\n} } }];\n"
+      },
+      "id": "1a02608e-f666-289e-6498-5ad4eba56b43",
+      "name": "Preparar respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "60523fd7-c5c1-e382-d635-9d3f1d365c89",
+      "name": "Gemini respuesta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1856,
+        720
+      ],
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Interpretar respuesta').first().json;\nconst r = $input.first().json;\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nlet txt = '';\ntry { txt = r.candidates[0].content.parts.map(x => x.text || '').join('').trim(); } catch (e) {}\nif (!txt) txt = 'Uy, no pude armar la respuesta ahorita 😅 Intenta de nuevo en un ratito o mira /ayuda.';\ntxt = esc(txt.slice(0, 3500))\n  .replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>')\n  .replace(/^\\s*[-*]\\s+/gm, '• ');\nreturn [{ json: { chat_id: p.chat_id, texto: txt } }];\n"
+      },
+      "id": "0494c1d8-3e51-22d4-2486-709ba4fd63af",
+      "name": "Responder IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        720
+      ]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Clasificar mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar mensaje": {
+      "main": [
+        [
+          {
+            "node": "Ruta mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ruta mensaje": {
+      "main": [
+        [
+          {
+            "node": "Descargar foto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SQL comando",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpretar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rango agenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SQL excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar foto": {
+      "main": [
+        [
+          {
+            "node": "Preparar IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar IA": {
+      "main": [
+        [
+          {
+            "node": "Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini": {
+      "main": [
+        [
+          {
+            "node": "Interpretar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar respuesta": {
+      "main": [
+        [
+          {
+            "node": "¿Guardar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Guardar?": {
+      "main": [
+        [
+          {
+            "node": "Guardar registro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crear evento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SQL comando",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rango agenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SQL excel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consultar pregunta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear evento": {
+      "main": [
+        [
+          {
+            "node": "SQL evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL evento": {
+      "main": [
+        [
+          {
+            "node": "Guardar registro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar registro": {
+      "main": [
+        [
+          {
+            "node": "Confirmar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmar": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL comando": {
+      "main": [
+        [
+          {
+            "node": "Consultar DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Diario 12am": {
+      "main": [
+        [
+          {
+            "node": "SQL diario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL diario": {
+      "main": [
+        [
+          {
+            "node": "Consultar DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lunes 7am": {
+      "main": [
+        [
+          {
+            "node": "SQL semanal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL semanal": {
+      "main": [
+        [
+          {
+            "node": "Consultar DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recurrentes 8am": {
+      "main": [
+        [
+          {
+            "node": "SQL recurrentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL recurrentes": {
+      "main": [
+        [
+          {
+            "node": "Consultar DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agenda 7am": {
+      "main": [
+        [
+          {
+            "node": "Clima Lima",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clima Lima": {
+      "main": [
+        [
+          {
+            "node": "Origen mañana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Origen mañana": {
+      "main": [
+        [
+          {
+            "node": "Rango agenda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Domingo 8pm": {
+      "main": [
+        [
+          {
+            "node": "Origen semana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Origen semana": {
+      "main": [
+        [
+          {
+            "node": "Rango agenda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rango agenda": {
+      "main": [
+        [
+          {
+            "node": "Calendar eventos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar eventos": {
+      "main": [
+        [
+          {
+            "node": "SQL agenda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL agenda": {
+      "main": [
+        [
+          {
+            "node": "Consultar DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar DB": {
+      "main": [
+        [
+          {
+            "node": "Formatear reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear reporte": {
+      "main": [
+        [
+          {
+            "node": "¿Foto?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Foto?": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enviar foto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL excel": {
+      "main": [
+        [
+          {
+            "node": "Datos excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Datos excel": {
+      "main": [
+        [
+          {
+            "node": "Convertir a Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convertir a Excel": {
+      "main": [
+        [
+          {
+            "node": "Enviar Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar pregunta": {
+      "main": [
+        [
+          {
+            "node": "Preparar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar respuesta": {
+      "main": [
+        [
+          {
+            "node": "Gemini respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini respuesta": {
+      "main": [
+        [
+          {
+            "node": "Responder IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder IA": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Lima"
+  }
+}

@@ -1,0 +1,204 @@
+{
+  "name": "Correos del banco",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "from:(PON_AQUI_EL_CORREO_DEL_BANCO)",
+          "readStatus": "both"
+        },
+        "options": {}
+      },
+      "id": "6722ba2d-d9b7-2e65-74e8-bd25864bcb16",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const CATEGORIAS = 'Comida (menú, restaurantes, snacks, delivery, supermercado), Transporte (taxi, Uber, InDrive, bus, combustible, peaje), Ocio (cine, salidas, juegos, bebidas, conciertos, streaming), Compras (ropa, tecnología, tiendas, artículos personales), Salud (farmacia, clínica, gimnasio), Educación (cursos, libros, universidad), Servicios (celular, internet, luz, agua, suscripciones de software), Hogar (casa, limpieza, muebles, ferretería), Otros';\nconst hoy = $now.setZone('America/Lima').toFormat('yyyy-MM-dd');\n\nreturn $input.all().map((it, i) => {\n  const e = it.json;\n  const texto = String(e.text || e.textAsHtml || e.snippet || '')\n    .replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 6000);\n  const de = (e.from && (e.from.text || (e.from.value && e.from.value[0] && e.from.value[0].address))) || '';\n  const prompt = `Eres el lector de notificaciones bancarias de un bot de finanzas personales en Perú. Hoy es ${hoy}.\nAnaliza este correo y responde SOLO un JSON con esta forma:\n{\"es_consumo\": boolean, \"monto\": number|null, \"moneda\": \"PEN\"|\"USD\"|null, \"comercio\": string|null, \"fecha\": \"YYYY-MM-DD\"|null, \"hora\": \"HH:MM\"|null, \"categoria\": string, \"descripcion\": string|null}\nReglas:\n- es_consumo=true SOLO si el correo avisa de dinero que SALIÓ de la cuenta o tarjeta del titular: compra o consumo con tarjeta, pago de servicio, yapeo/plin enviado, transferencia enviada, retiro.\n- es_consumo=false para: dinero recibido, publicidad, promociones, estados de cuenta, códigos de verificación, alertas de inicio de sesión, operaciones rechazadas o anuladas.\n- monto: el importe con punto decimal. moneda: \"PEN\" para soles (S/), \"USD\" para dólares (US$ o $).\n- comercio: nombre del comercio o persona a la que se pagó, tal como aparece.\n- fecha y hora de la operación (24h), si aparecen.\n- descripcion: muy corta y en minúsculas, basada en el comercio (ej: \"plaza vea\", \"uber\", \"pago de luz\").\n- categoria: exactamente una de: ${CATEGORIAS}.\n\nDe: ${de}\nAsunto: ${e.subject || ''}\nCorreo: \"\"\"${texto}\"\"\"`;\n  return {\n    json: {\n      body: {\n        contents: [{ role: 'user', parts: [{ text: prompt }] }],\n        generationConfig: { temperature: 0, responseMimeType: 'application/json' }\n      }\n    },\n    pairedItem: i,\n  };\n});\n"
+      },
+      "id": "71bf3a89-7324-9100-b494-f84f6fec1654",
+      "name": "Preparar IA correo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "85793f75-fd37-8f18-7d09-88e6f464ca04",
+      "name": "Gemini correo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nconst chat = Number(CHAT_ID);\nconst CATS = ['Comida', 'Transporte', 'Ocio', 'Compras', 'Salud', 'Educación', 'Servicios', 'Hogar', 'Otros'];\nconst norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();\nconst q = v => (v === null || v === undefined || v === '') ? 'NULL' : \"'\" + String(v).replace(/'/g, \"''\") + \"'\";\nconst TZ = \"'America/Lima'\";\nconst INI_MES = `(date_trunc('month', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ})`;\n\nconst out = [];\n$input.all().forEach((it, i) => {\n  const r = it.json;\n  const mail = $('Gmail Trigger').itemMatching(i).json;\n\n  let data = null;\n  try {\n    const txt = r.candidates[0].content.parts.map(p => p.text || '').join('');\n    data = JSON.parse(txt.replace(/```json|```/g, '').trim());\n    if (Array.isArray(data)) data = data[0];\n  } catch (e) { data = null; }\n  if (!data || !data.es_consumo || !(Number(data.monto) > 0)) return;   // no es un gasto → se ignora\n\n  const monto = Math.round(Number(data.monto) * 100) / 100;\n  const cat = CATS.find(c => norm(c) === norm(data.categoria)) || 'Otros';\n  const comercio = data.comercio ? String(data.comercio).trim().slice(0, 120) : null;\n  let desc = data.descripcion ? String(data.descripcion).trim().toLowerCase().slice(0, 190) : (comercio ? comercio.toLowerCase() : null);\n  if (String(data.moneda || '').toUpperCase() === 'USD') desc = (desc ? desc + ' ' : '') + '(USD)';\n\n  // Fecha: la del correo o la de la operación si viene en el texto\n  let fechaExpr = 'now()';\n  const fMail = mail.date ? DateTime.fromJSDate(new Date(mail.date)) : null;\n  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(data.fecha || '')) {\n    const hora = /^\\d{2}:\\d{2}$/.test(data.hora || '') ? data.hora : '12:00';\n    const f = DateTime.fromISO(`${data.fecha}T${hora}`, { zone: 'America/Lima' });\n    const dias = f.isValid ? $now.diff(f, 'days').days : 999;\n    if (dias >= -1 && dias <= 30) fechaExpr = `(${q(data.fecha + ' ' + hora)}::timestamp AT TIME ZONE 'America/Lima')`;\n  } else if (fMail && fMail.isValid) {\n    fechaExpr = `${q(fMail.toISO())}::timestamptz`;\n  }\n\n  const sql = `\nWITH nuevo AS (\n  SELECT ${fechaExpr}::timestamptz AS fecha, ${monto}::numeric AS monto, ${q(desc)}::text AS descripcion,\n         ${q(cat)}::text AS categoria, 'correo'::text AS metodo, ${q(comercio)}::text AS destinatario,\n         ${chat}::bigint AS chat_id, ${q(String(mail.subject || '').slice(0, 300))}::text AS mensaje_original,\n         ${q(mail.id)}::text AS email_id\n), ins AS (\n  INSERT INTO gastos (fecha, monto, descripcion, categoria, metodo, destinatario, chat_id, mensaje_original, email_id)\n  SELECT n.* FROM nuevo n\n  WHERE NOT EXISTS (   -- ya lo registraste a mano o por captura (mismo monto, ±20 min)\n    SELECT 1 FROM gastos g\n    WHERE g.chat_id = n.chat_id AND g.monto = n.monto\n      AND g.fecha BETWEEN n.fecha - interval '20 minutes' AND n.fecha + interval '20 minutes')\n  ON CONFLICT (email_id) DO NOTHING\n  RETURNING *\n)\nSELECT (SELECT count(*) FROM ins)::int AS insertado,\n       n.chat_id, n.monto, n.descripcion, n.categoria, n.destinatario,\n       to_char(n.fecha AT TIME ZONE ${TZ}, 'DD/MM HH24:MI') AS fecha_local,\n       (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = n.chat_id AND fecha >= ${INI_MES})\n         + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_MES}) AS total_mes,\n       (SELECT monto FROM presupuestos WHERE chat_id = n.chat_id AND categoria = n.categoria) AS presupuesto,\n       (SELECT COALESCE(sum(monto), 0) FROM gastos WHERE chat_id = n.chat_id AND categoria = n.categoria AND fecha >= ${INI_MES})\n         + (SELECT COALESCE(sum(monto), 0) FROM ins WHERE fecha >= ${INI_MES}) AS gastado_cat_mes\nFROM nuevo n;`;\n  out.push({ json: { sql }, pairedItem: i });\n});\nreturn out;\n"
+      },
+      "id": "b6497200-260f-136e-d531-61599adf117f",
+      "name": "SQL correo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "87666a9f-d0bc-9a59-f5fa-11153059fd82",
+      "name": "Guardar correo",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const S = n => 'S/ ' + Number(n || 0).toFixed(2);\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst EMOJI = { 'Comida': '🍔', 'Transporte': '🚕', 'Ocio': '🎮', 'Compras': '🛍️', 'Salud': '💊', 'Educación': '📚', 'Servicios': '💡', 'Hogar': '🏠', 'Otros': '📦' };\n\nconst out = [];\nfor (const it of $input.all()) {\n  const r = it.json;\n  if (!Number(r.insertado)) continue;   // duplicado → no avisa\n  const L = [\n    '🏦 <b>Gasto detectado en tu correo</b>',\n    `💸 <b>${S(r.monto)}</b>${r.descripcion ? ' — ' + esc(r.descripcion) : ''}`,\n    `${EMOJI[r.categoria] || '📦'} ${esc(r.categoria)} · 🕒 ${r.fecha_local}`,\n    '',\n    `Este mes: <b>${S(r.total_mes)}</b>`,\n  ];\n  if (r.presupuesto !== null && r.presupuesto !== undefined && Number(r.presupuesto) > 0) {\n    const p = Number(r.presupuesto), g = Number(r.gastado_cat_mes), pct = g / p * 100;\n    if (pct >= 100) L.push('', `🚨 <b>Te pasaste</b> del presupuesto de ${esc(r.categoria)}: ${S(g)} de ${S(p)} (${pct.toFixed(0)}%)`);\n    else if (pct >= 80) L.push('', `⚠️ Llevas el ${pct.toFixed(0)}% del presupuesto de ${esc(r.categoria)}. Te quedan ${S(p - g)}.`);\n    else L.push(`🎯 ${esc(r.categoria)}: ${S(g)} de ${S(p)} (${pct.toFixed(0)}%)`);\n  }\n  L.push('', '<i>¿Mal categorizado? /cat comida · ¿No era un gasto? /borrar</i>');\n  out.push({ json: { chat_id: r.chat_id, texto: L.join('\\n') } });\n}\nreturn out;\n"
+      },
+      "id": "821fa601-7ef0-4c47-83d2-0bccf4cb1fab",
+      "name": "Mensaje correo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "3a79ca74-2c28-16d7-744b-f692b002a83b",
+      "name": "Avisar en Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1344,
+        0
+      ],
+      "webhookId": "44cef469-d6f2-eeae-c288-bb71a7210df4"
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar IA correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar IA correo": {
+      "main": [
+        [
+          {
+            "node": "Gemini correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini correo": {
+      "main": [
+        [
+          {
+            "node": "SQL correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL correo": {
+      "main": [
+        [
+          {
+            "node": "Guardar correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar correo": {
+      "main": [
+        [
+          {
+            "node": "Mensaje correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje correo": {
+      "main": [
+        [
+          {
+            "node": "Avisar en Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Lima"
+  }
+}

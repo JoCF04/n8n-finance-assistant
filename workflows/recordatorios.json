@@ -1,0 +1,140 @@
+{
+  "name": "Recordatorios",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "dab90261-8632-bbd9-3d4a-acd63a394c4f",
+      "name": "Cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ Tu chat_id de Telegram\nconst CHAT_ID = 'TU_CHAT_ID';\nconst c = Number(CHAT_ID);\n\n// Corre cada minuto: toma los recordatorios que ya tocan, los marca como enviados\n// y, si se repiten, calcula la próxima fecha.\nconst sig = (paso, extra, filtro = '') => `(SELECT min(t) FROM generate_series(r.cuando + interval '${paso}', now() + interval '${extra}', interval '${paso}') t WHERE t > now()${filtro})`;\nconst sql = `\nWITH due AS (\n  SELECT * FROM recordatorios WHERE chat_id = ${c} AND activo AND cuando <= now() ORDER BY cuando LIMIT 20\n), upd AS (\n  UPDATE recordatorios r SET\n    enviado_en = now(),\n    activo = (r.repetir IS NOT NULL),\n    cuando = COALESCE(CASE r.repetir\n      WHEN 'diario'     THEN ${sig('1 day', '2 days')}\n      WHEN 'semanal'    THEN ${sig('7 days', '8 days')}\n      WHEN 'mensual'    THEN ${sig('1 month', '32 days')}\n      WHEN 'laborables' THEN ${sig('1 day', '5 days', \" AND extract(isodow FROM t AT TIME ZONE 'America/Lima') < 6\")}\n      ELSE r.cuando END, now() + interval '1 day')\n  FROM due WHERE r.id = due.id\n  RETURNING r.id\n)\nSELECT ${c}::bigint AS chat_id,\n  COALESCE((SELECT json_agg(json_build_object('id', id, 'texto', texto, 'repetir', repetir) ORDER BY cuando) FROM due), '[]'::json) AS avisos,\n  (SELECT count(*) FROM upd)::int AS n;`;\nreturn [{ json: { sql } }];\n"
+      },
+      "id": "8a7fef54-dcf8-70b1-b6ed-413da785bf8d",
+      "name": "SQL recordatorios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ $json.sql }}",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "24cf785a-37b8-6da0-7192-78896066a2a8",
+      "name": "Buscar recordatorios",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst REP = { diario: 'todos los días', semanal: 'cada semana', mensual: 'cada mes', laborables: 'de lunes a viernes' };\nconst out = [];\nfor (const it of $input.all()) {\n  const r = it.json;\n  const avisos = typeof r.avisos === 'string' ? JSON.parse(r.avisos) : (r.avisos || []);\n  for (const a of avisos) {\n    const evento = String(a.texto).startsWith('📅');\n    out.push({ json: { chat_id: r.chat_id, texto: [\n      evento ? esc(a.texto) : `⏰ <b>Recordatorio</b>\\n${esc(a.texto)}`,\n      a.repetir ? `🔁 <i>Se repite ${REP[a.repetir] || a.repetir}</i>` : null,\n      '',\n      '<i>/posponer 10 · /posponer 1h</i>',\n    ].filter(l => l !== null).join('\\n') } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "14323aa5-d1cd-88b3-6a81-15f90655a18d",
+      "name": "Mensaje recordatorio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "c6fba52a-ea2f-d03f-ee37-9cc38f05d787",
+      "name": "Enviar recordatorio",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        0
+      ],
+      "webhookId": "20e5f9dc-5042-7c02-1d02-eabe0a5af2e2"
+    }
+  ],
+  "connections": {
+    "Cada minuto": {
+      "main": [
+        [
+          {
+            "node": "SQL recordatorios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SQL recordatorios": {
+      "main": [
+        [
+          {
+            "node": "Buscar recordatorios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar recordatorios": {
+      "main": [
+        [
+          {
+            "node": "Mensaje recordatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje recordatorio": {
+      "main": [
+        [
+          {
+            "node": "Enviar recordatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Lima",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  }
+}

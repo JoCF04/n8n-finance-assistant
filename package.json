@@ -1,0 +1,15 @@
+{
+  "name": "n8n-finance-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Asistente personal de finanzas y productividad en Telegram, construido sobre n8n + Postgres + Gemini.",
+  "scripts": {
+    "build": "node build/build.js",
+    "test": "node build/build.js && node --test --test-concurrency=1 \"tests/*.test.js\""
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "luxon": "^3.5.0",
+    "pg": "^8.13.0"
+  }
+}
